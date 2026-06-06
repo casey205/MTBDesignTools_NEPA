@@ -1,0 +1,9 @@
+[general]
+name=MTBDesignTools NEPA
+qgisMinimumVersion=3.40
+description=MTB trail design with integrated NEPA environmental compliance analysis. Elevation profile/IMBA classification plus stream crossing analysis, habitat overlap detection, and NEPA report generation for USFS projects.
+version=0.1.0
+author=Casey Varnum, Redside Surveying and Mapping, LLC
+email=casey@redsidemapping.com
+category=Analysis
+icon=icon.png

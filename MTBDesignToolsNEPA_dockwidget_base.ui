@@ -1,0 +1,594 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MTBDesignToolsNEPADockWidgetBase</class>
+ <widget class="QDockWidget" name="MTBDesignToolsNEPADockWidgetBase">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>620</width>
+    <height>560</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>MTB Design Tools - NEPA</string>
+  </property>
+  <widget class="QWidget" name="dockWidgetContents">
+   <layout class="QVBoxLayout" name="outerLayout">
+    <property name="spacing">
+     <number>4</number>
+    </property>
+    <property name="leftMargin">
+     <number>6</number>
+    </property>
+    <property name="topMargin">
+     <number>6</number>
+    </property>
+    <property name="rightMargin">
+     <number>6</number>
+    </property>
+    <property name="bottomMargin">
+     <number>6</number>
+    </property>
+
+    <!-- Shared: Trail + DEM pickers (always visible above tabs) -->
+    <item>
+     <layout class="QHBoxLayout" name="trailDemRow">
+      <property name="spacing">
+       <number>4</number>
+      </property>
+      <item>
+       <widget class="QLabel" name="trailLabel">
+        <property name="text">
+         <string>Trail:</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QComboBox" name="trailDropdown">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+          <horstretch>1</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="toolTip">
+         <string>Pick a trail to select it on the map — or select features graphically / via Attribute Table</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="refreshTrailButton">
+        <property name="text">
+         <string>↻</string>
+        </property>
+        <property name="toolTip">
+         <string>Refresh trail list from layer</string>
+        </property>
+        <property name="maximumWidth">
+         <number>28</number>
+        </property>
+        <property name="maximumHeight">
+         <number>24</number>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="demLabel">
+        <property name="text">
+         <string>DEM:</string>
+        </property>
+        <property name="toolTip">
+         <string>Elevation model used for profile generation</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QComboBox" name="demDropdown">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+          <horstretch>1</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="refreshDemButton">
+        <property name="text">
+         <string>↻</string>
+        </property>
+        <property name="toolTip">
+         <string>Refresh elevation model list</string>
+        </property>
+        <property name="maximumWidth">
+         <number>28</number>
+        </property>
+        <property name="maximumHeight">
+         <number>24</number>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+
+    <!-- Main tab widget -->
+    <item>
+     <widget class="QTabWidget" name="mainTabWidget">
+
+      <!-- ═══════════════════════════════════════ -->
+      <!-- Tab 0: Profile & Difficulty             -->
+      <!-- ═══════════════════════════════════════ -->
+      <widget class="QWidget" name="profileTab">
+       <attribute name="title">
+        <string>Profile &amp; Difficulty</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="profileTabLayout">
+        <property name="spacing">
+         <number>4</number>
+        </property>
+        <property name="leftMargin">
+         <number>4</number>
+        </property>
+        <property name="topMargin">
+         <number>4</number>
+        </property>
+        <property name="rightMargin">
+         <number>4</number>
+        </property>
+        <property name="bottomMargin">
+         <number>4</number>
+        </property>
+
+        <!-- Options row: units, IMBA, reverse -->
+        <item>
+         <layout class="QHBoxLayout" name="optionsRow">
+          <property name="spacing">
+           <number>4</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="unitsLabel">
+            <property name="text">
+             <string>Units:</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="distanceUnitsDropdown">
+            <property name="maximumWidth">
+             <number>90</number>
+            </property>
+            <item>
+             <property name="text">
+              <string>Native</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Miles</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Kilometers</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item>
+           <spacer name="optionsSpacer1">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Fixed</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>12</width>
+              <height>0</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QCheckBox" name="imbaSlopeCheckBox">
+            <property name="text">
+             <string>IMBA Classification</string>
+            </property>
+            <property name="toolTip">
+             <string>Colour the profile by IMBA slope difficulty classification</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="imbaModeComboBox">
+            <property name="maximumWidth">
+             <number>100</number>
+            </property>
+            <item>
+             <property name="text">
+              <string>Climbing</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Descending</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item>
+           <spacer name="optionsSpacer2">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Fixed</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>12</width>
+              <height>0</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QCheckBox" name="reverseDirectionCheckBox">
+            <property name="text">
+             <string>⇄ Reverse</string>
+            </property>
+            <property name="toolTip">
+             <string>Flip the profile start/end — use when the trail was digitized from finish to start</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="optionsStretch">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Expanding</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>0</width>
+              <height>0</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+         </layout>
+        </item>
+
+        <!-- Action buttons row -->
+        <item>
+         <layout class="QHBoxLayout" name="actionRow">
+          <property name="spacing">
+           <number>4</number>
+          </property>
+          <item>
+           <widget class="QPushButton" name="zoomButton">
+            <property name="text">
+             <string>Zoom to Selected</string>
+            </property>
+            <property name="toolTip">
+             <string>Zoom map to selected trail features</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="profileButton">
+            <property name="text">
+             <string>Generate Profile</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+
+        <!-- Summary bar -->
+        <item>
+         <widget class="QTextEdit" name="summaryText">
+          <property name="readOnly">
+           <bool>true</bool>
+          </property>
+          <property name="maximumHeight">
+           <number>52</number>
+          </property>
+         </widget>
+        </item>
+
+        <!-- Matplotlib canvas placeholder -->
+        <item>
+         <widget class="QLabel" name="profileLabel">
+          <property name="text">
+           <string>Elevation profile will appear here.</string>
+          </property>
+         </widget>
+        </item>
+
+       </layout>
+      </widget>
+
+      <!-- ═══════════════════════════════════════ -->
+      <!-- Tab 1: Stream Crossings                 -->
+      <!-- ═══════════════════════════════════════ -->
+      <widget class="QWidget" name="crossingsTab">
+       <attribute name="title">
+        <string>Stream Crossings</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="crossingsTabLayout">
+        <property name="spacing">
+         <number>6</number>
+        </property>
+        <property name="leftMargin">
+         <number>6</number>
+        </property>
+        <property name="topMargin">
+         <number>6</number>
+        </property>
+        <property name="rightMargin">
+         <number>6</number>
+        </property>
+        <property name="bottomMargin">
+         <number>6</number>
+        </property>
+
+        <item>
+         <widget class="QLabel" name="crossingsInfoLabel">
+          <property name="text">
+           <string>Finds all trail–stream intersections. Select trails above (or leave unselected for all). Requires a stream network layer (NHD, LiDAR-derived, or FS corporate streams).</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+          <property name="styleSheet">
+           <string>color: #555; font-style: italic;</string>
+          </property>
+         </widget>
+        </item>
+
+        <!-- Streams layer selector -->
+        <item>
+         <layout class="QHBoxLayout" name="streamsRow">
+          <property name="spacing">
+           <number>4</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="streamsLabel">
+            <property name="text">
+             <string>Streams layer:</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="streamsDropdown">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+              <horstretch>1</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="toolTip">
+             <string>Select the stream network layer to intersect with the trail alignment</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="refreshStreamsButton">
+            <property name="text">
+             <string>↻</string>
+            </property>
+            <property name="toolTip">
+             <string>Refresh stream layer list</string>
+            </property>
+            <property name="maximumWidth">
+             <number>28</number>
+            </property>
+            <property name="maximumHeight">
+             <number>24</number>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+
+        <!-- Run button -->
+        <item>
+         <layout class="QHBoxLayout" name="crossingsActionRow">
+          <item>
+           <widget class="QPushButton" name="runCrossingsButton">
+            <property name="text">
+             <string>Find Stream Crossings</string>
+            </property>
+            <property name="toolTip">
+             <string>Intersect selected trail(s) with the stream layer to identify all crossings</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="exportCrossingsButton">
+            <property name="text">
+             <string>Export to Shapefile…</string>
+            </property>
+            <property name="toolTip">
+             <string>Save crossing points as a GIS shapefile for the NEPA project record</string>
+            </property>
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="crossingsActionStretch">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Expanding</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>0</width>
+              <height>0</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+         </layout>
+        </item>
+
+        <!-- Results -->
+        <item>
+         <widget class="QTextEdit" name="crossingsResultsText">
+          <property name="readOnly">
+           <bool>true</bool>
+          </property>
+          <property name="placeholderText">
+           <string>Crossing results will appear here after running analysis.</string>
+          </property>
+          <property name="fontFamily">
+           <string>Courier New</string>
+          </property>
+         </widget>
+        </item>
+
+       </layout>
+      </widget>
+
+      <!-- ═══════════════════════════════════════ -->
+      <!-- Tab 2: Habitat Overlap                  -->
+      <!-- ═══════════════════════════════════════ -->
+      <widget class="QWidget" name="habitatTab">
+       <attribute name="title">
+        <string>Habitat Overlap</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="habitatTabLayout">
+        <property name="leftMargin">
+         <number>6</number>
+        </property>
+        <property name="topMargin">
+         <number>6</number>
+        </property>
+        <property name="rightMargin">
+         <number>6</number>
+        </property>
+        <property name="bottomMargin">
+         <number>6</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="habitatComingSoonLabel">
+          <property name="text">
+           <string>Coming soon: Habitat &amp; Sensitive Species Overlap
+
+This tool will intersect the trail corridor against loaded sensitive area layers (NSO habitat, Critical Habitat, Riparian Reserves, spotted frog areas, pond turtle sites, etc.) and generate a summary table for Biological Evaluations and the LAA Pre-reporting document.
+
+Load your USFS corporate GIS layers into the project, then return here to run the overlap analysis.</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignTop|Qt::AlignLeft</set>
+          </property>
+          <property name="styleSheet">
+           <string>color: #555; padding: 8px;</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="habitatSpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeType">
+           <enum>QSizePolicy::Expanding</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>0</width>
+            <height>0</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- ═══════════════════════════════════════ -->
+      <!-- Tab 3: NEPA Report                      -->
+      <!-- ═══════════════════════════════════════ -->
+      <widget class="QWidget" name="reportTab">
+       <attribute name="title">
+        <string>NEPA Report</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="reportTabLayout">
+        <property name="leftMargin">
+         <number>6</number>
+        </property>
+        <property name="topMargin">
+         <number>6</number>
+        </property>
+        <property name="rightMargin">
+         <number>6</number>
+        </property>
+        <property name="bottomMargin">
+         <number>6</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="reportComingSoonLabel">
+          <property name="text">
+           <string>Coming soon: Submit for NEPA Review
+
+This tool will package your trail design data into a standardized NEPA submission including:
+
+  • Trail alignment shapefiles segmented by habitat type and land management allocation
+  • Stream crossing point shapefile (with stream class attributes)
+  • Sensitive area overlap summary table
+  • Trail statistics: length by allocation, crossings by stream class, miles in Riparian Reserve
+  • IMBA difficulty classification summary
+
+Complete the Profile &amp; Difficulty and Stream Crossings analyses first, then return here to generate the report package.</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignTop|Qt::AlignLeft</set>
+          </property>
+          <property name="styleSheet">
+           <string>color: #555; padding: 8px;</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="reportSpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeType">
+           <enum>QSizePolicy::Expanding</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>0</width>
+            <height>0</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </widget>
+
+     </widget>
+    </item>
+
+   </layout>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
