@@ -340,7 +340,7 @@
         <item>
          <widget class="QLabel" name="crossingsInfoLabel">
           <property name="text">
-           <string>Finds all trail–stream intersections. Select trails above (or leave unselected for all). Requires a stream network layer (NHD, LiDAR-derived, or FS corporate streams).</string>
+           <string>Finds all trail–stream intersections across all selected hydro layers. Stream class is derived from the layer name (e.g. "Class 2"). Select trails above (or leave unselected for all).</string>
           </property>
           <property name="wordWrap">
            <bool>true</bool>
@@ -351,29 +351,48 @@
          </widget>
         </item>
 
-        <!-- Streams layer selector -->
+        <!-- Hydro layers header row -->
         <item>
-         <layout class="QHBoxLayout" name="streamsRow">
+         <layout class="QHBoxLayout" name="streamsHeaderRow">
           <property name="spacing">
            <number>4</number>
           </property>
           <item>
            <widget class="QLabel" name="streamsLabel">
             <property name="text">
-             <string>Streams layer:</string>
+             <string>Hydro layers (Ctrl+click to multi-select):</string>
             </property>
            </widget>
           </item>
           <item>
-           <widget class="QComboBox" name="streamsDropdown">
-            <property name="sizePolicy">
-             <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
-              <horstretch>1</horstretch>
-              <verstretch>0</verstretch>
-             </sizepolicy>
+           <spacer name="streamsHeaderStretch">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Expanding</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>0</width>
+              <height>0</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QPushButton" name="selectAllStreamsButton">
+            <property name="text">
+             <string>All</string>
             </property>
             <property name="toolTip">
-             <string>Select the stream network layer to intersect with the trail alignment</string>
+             <string>Select all hydro layers</string>
+            </property>
+            <property name="maximumWidth">
+             <number>40</number>
+            </property>
+            <property name="maximumHeight">
+             <number>24</number>
             </property>
            </widget>
           </item>
@@ -383,7 +402,7 @@
              <string>↻</string>
             </property>
             <property name="toolTip">
-             <string>Refresh stream layer list</string>
+             <string>Refresh hydro layer list from project</string>
             </property>
             <property name="maximumWidth">
              <number>28</number>
@@ -396,7 +415,25 @@
          </layout>
         </item>
 
-        <!-- Run button -->
+        <!-- Multi-select hydro layers list -->
+        <item>
+         <widget class="QListWidget" name="streamsListWidget">
+          <property name="maximumHeight">
+           <number>120</number>
+          </property>
+          <property name="minimumHeight">
+           <number>60</number>
+          </property>
+          <property name="selectionMode">
+           <enum>QAbstractItemView::ExtendedSelection</enum>
+          </property>
+          <property name="toolTip">
+           <string>Select one or more hydro layers. Stream class will be inferred from layer name (e.g. "Class 2", "Class_3").</string>
+          </property>
+         </widget>
+        </item>
+
+        <!-- Action buttons row -->
         <item>
          <layout class="QHBoxLayout" name="crossingsActionRow">
           <item>
@@ -405,7 +442,7 @@
              <string>Find Stream Crossings</string>
             </property>
             <property name="toolTip">
-             <string>Intersect selected trail(s) with the stream layer to identify all crossings</string>
+             <string>Intersect trail(s) with all selected hydro layers and identify crossings</string>
             </property>
            </widget>
           </item>

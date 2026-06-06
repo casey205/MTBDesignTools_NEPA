@@ -102,6 +102,32 @@ def distance_multiplier(layer, unit_text: str) -> float:
     return 1.0
 
 
+def _class_from_layer_name(layer_name: str) -> str:
+    """Infer WNF stream class from layer name (e.g. 'Class 2', 'Class_3', 'Streams_2')."""
+    import re
+    m = re.search(r'class\s*[_\-]?\s*([1-5])', layer_name, re.IGNORECASE)
+    if m:
+        return f"Class {m.group(1)}"
+    m = re.search(r'\b([1-5])\b', layer_name)
+    if m:
+        return f"Class {m.group(1)}"
+    return layer_name
+
+
+def _fish_bearing_from_class(class_str: str) -> str:
+    """Flag fish-bearing status based on WNF stream class per the NEPA RFP."""
+    s = class_str.lower()
+    if "2" in s:
+        return "Yes"       # Class 2 = fish-bearing per WNF/NWFP
+    if "1" in s:
+        return "Verify"    # Class 1 may be perennial non-fish — needs field confirmation
+    if "3" in s or "4" in s:
+        return "Verify"    # Intermittent — may have fish in portions
+    if "5" in s:
+        return "No"        # Ephemeral
+    return "Unknown"
+
+
 def _extract_points_from_geom(geom):
     """Extract all QgsPointXY values from any geometry type (Point, MultiPoint, Collection)."""
     pts = []
@@ -321,20 +347,19 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         )
 
     def _setup_crossings_tab(self):
-        self.refreshStreamsButton.clicked.connect(self.populate_streams_dropdown)
+        self.refreshStreamsButton.clicked.connect(self.populate_streams_list)
+        self.selectAllStreamsButton.clicked.connect(self._select_all_streams)
         self.runCrossingsButton.clicked.connect(self.run_crossing_analysis)
         self.exportCrossingsButton.clicked.connect(self.export_crossings)
-        self.populate_streams_dropdown()
+        self.populate_streams_list()
 
-        # Monospace font for the results table
         from qgis.PyQt.QtGui import QFont
-        font = QFont("Courier New", 9)
-        self.crossingsResultsText.setFont(font)
+        self.crossingsResultsText.setFont(QFont("Courier New", 9))
 
     def _on_layers_changed(self, *_args):
         self.populate_trail_dropdown()
         self.populate_dem_dropdown()
-        self.populate_streams_dropdown()
+        self.populate_streams_list()
 
     # ──────────────────────────────────────────────
     # Shared: Trail + DEM dropdowns
@@ -703,17 +728,35 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
     # Tab 1: Stream Crossings
     # ──────────────────────────────────────────────
 
-    def populate_streams_dropdown(self, *_args):
-        self.streamsDropdown.clear()
-        self.streamsDropdown.addItem("— select streams layer —", userData=None)
-        for lyr in QgsProject.instance().mapLayers().values():
+    def populate_streams_list(self, *_args):
+        """Populate the multi-select hydro layer list with all line layers in the project."""
+        self.streamsListWidget.clear()
+        for lyr in sorted(
+            QgsProject.instance().mapLayers().values(), key=lambda l: l.name()
+        ):
             if isinstance(lyr, QgsVectorLayer) and lyr.geometryType() == QgsWkbTypes.LineGeometry:
-                self.streamsDropdown.addItem(lyr.name(), lyr.id())
+                from qgis.PyQt.QtWidgets import QListWidgetItem
+                item = QListWidgetItem(lyr.name())
+                item.setData(Qt.UserRole, lyr.id())
+                self.streamsListWidget.addItem(item)
+
+    def _select_all_streams(self):
+        self.streamsListWidget.selectAll()
+
+    def _get_selected_stream_layers(self):
+        layers = []
+        for item in self.streamsListWidget.selectedItems():
+            lyr = QgsProject.instance().mapLayer(item.data(Qt.UserRole))
+            if lyr:
+                layers.append(lyr)
+        return layers
 
     def run_crossing_analysis(self):
+        from qgis.PyQt.QtWidgets import QApplication
+        from collections import defaultdict
+
         trail_lyr = trail_layer() or self.iface.activeLayer()
-        streams_id = self.streamsDropdown.currentData()
-        streams_lyr = QgsProject.instance().mapLayer(streams_id) if streams_id else None
+        stream_layers = self._get_selected_stream_layers()
 
         if not trail_lyr:
             QMessageBox.warning(
@@ -721,11 +764,11 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 "No trail layer found.\nLoad a Trail_Design (or Trail_Alignment) layer."
             )
             return
-        if not streams_lyr:
+        if not stream_layers:
             QMessageBox.warning(
                 self, "Stream Crossings",
-                "Select a streams layer from the dropdown.\n"
-                "Load NHD, LiDAR-derived streams, or FS corporate stream data first."
+                "Select one or more hydro layers from the list.\n"
+                "Use Ctrl+click to select multiple layers (e.g. Class 1 through Class 5)."
             )
             return
 
@@ -742,162 +785,257 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         trail_name_field = next(
             (f for f in ["Name", "name", "Trail_Name", "trail_name"] if f in trail_fields), None
         )
+        miles_multiplier = distance_multiplier(trail_lyr, "Miles")
 
-        stream_fields = [f.name() for f in streams_lyr.fields()]
-        stream_class_field = next(
-            (f for f in ["StreamClass", "stream_class", "CLASS", "STRMCLASS",
-                         "strm_class", "FType", "ftype", "FTYPE"] if f in stream_fields),
-            None
+        self.crossingsResultsText.setPlainText(
+            f"Running analysis across {len(stream_layers)} hydro layer(s)…"
         )
-        stream_name_field = next(
-            (f for f in ["GNIS_Name", "GNIS_name", "Name", "name",
-                         "StreamName", "stream_name", "STREAM_NAM"] if f in stream_fields),
-            None
-        )
-
-        # Build coordinate transform if CRS differs (streams → trail CRS)
-        needs_transform = trail_lyr.crs() != streams_lyr.crs()
-        transform = QgsCoordinateTransform(
-            streams_lyr.crs(), trail_lyr.crs(), QgsProject.instance()
-        ) if needs_transform else None
-
-        crs_note = ""
-        if needs_transform:
-            crs_note = (
-                f"\nNote: stream layer CRS ({streams_lyr.crs().authid()}) differs from "
-                f"trail layer CRS ({trail_lyr.crs().authid()}) — "
-                "geometries reprojected automatically."
-            )
-
-        # Build spatial index over reprojected stream geometries for performance
-        self.crossingsResultsText.setPlainText("Running analysis…")
-        from qgis.PyQt.QtWidgets import QApplication
         QApplication.processEvents()
 
-        stream_index = QgsSpatialIndex()
-        stream_geom_cache = {}
-        stream_feature_cache = {}
-        for sf in streams_lyr.getFeatures():
-            geom = sf.geometry()
-            if not geom:
-                continue
-            if transform:
-                geom = QgsGeometry(geom)
-                geom.transform(transform)
-            stream_index.addFeature(sf) if not transform else None
-            stream_geom_cache[sf.id()] = geom
-            stream_feature_cache[sf.id()] = sf
+        all_crossings = []
+        crs_notes = []
 
-        # When reprojecting, the spatial index must be built from transformed geometries
-        if transform:
-            from qgis.core import QgsFeature as _QgsFeature
+        for streams_lyr in stream_layers:
+            stream_class_label = _class_from_layer_name(streams_lyr.name())
+
+            stream_fields = [f.name() for f in streams_lyr.fields()]
+            stream_name_field = next(
+                (f for f in ["GNIS_Name", "GNIS_name", "Name", "name",
+                             "StreamName", "stream_name", "STREAM_NAM"] if f in stream_fields),
+                None
+            )
+
+            # Reproject streams to trail CRS if needed
+            needs_transform = trail_lyr.crs() != streams_lyr.crs()
+            transform = QgsCoordinateTransform(
+                streams_lyr.crs(), trail_lyr.crs(), QgsProject.instance()
+            ) if needs_transform else None
+            if needs_transform:
+                crs_notes.append(
+                    f"{streams_lyr.name()}: {streams_lyr.crs().authid()} → {trail_lyr.crs().authid()}"
+                )
+
+            # Build reprojected geometry cache + spatial index
+            stream_geom_cache = {}
+            stream_feature_cache = {}
+            for sf in streams_lyr.getFeatures():
+                geom = sf.geometry()
+                if not geom:
+                    continue
+                if transform:
+                    geom = QgsGeometry(geom)
+                    geom.transform(transform)
+                stream_geom_cache[sf.id()] = geom
+                stream_feature_cache[sf.id()] = sf
+
             stream_index = QgsSpatialIndex()
             for fid, geom in stream_geom_cache.items():
-                tmp = _QgsFeature(fid)
+                tmp = QgsFeature(fid)
                 tmp.setGeometry(geom)
                 stream_index.addFeature(tmp)
 
-        crossings = []
-        for trail_feat in trail_features:
-            trail_geom = trail_feat.geometry()
-            if not trail_geom:
-                continue
-
-            t_name = (
-                str(trail_feat.attribute(trail_name_field))
-                if trail_name_field else f"Trail {trail_feat.id()}"
-            )
-
-            candidate_ids = stream_index.intersects(trail_geom.boundingBox())
-            for sid in candidate_ids:
-                sf = stream_feature_cache.get(sid)
-                if sf is None:
+            # Find crossings for each trail feature
+            for trail_feat in trail_features:
+                trail_geom = trail_feat.geometry()
+                if not trail_geom:
                     continue
-                stream_geom = stream_geom_cache.get(sid)
-                if not stream_geom or not trail_geom.intersects(stream_geom):
-                    continue
+                t_name = (
+                    str(trail_feat.attribute(trail_name_field))
+                    if trail_name_field else f"Trail {trail_feat.id()}"
+                )
 
-                intersection = trail_geom.intersection(stream_geom)
-                pts = _extract_points_from_geom(intersection)
+                for sid in stream_index.intersects(trail_geom.boundingBox()):
+                    sf = stream_feature_cache.get(sid)
+                    stream_geom = stream_geom_cache.get(sid)
+                    if not sf or not stream_geom:
+                        continue
+                    if not trail_geom.intersects(stream_geom):
+                        continue
 
-                s_class = str(sf.attribute(stream_class_field)) if stream_class_field else "Unknown"
-                s_name = str(sf.attribute(stream_name_field)) if stream_name_field else f"Stream {sf.id()}"
-                if s_name in ("NULL", "None", ""):
-                    s_name = f"Stream {sf.id()}"
+                    pts = _extract_points_from_geom(trail_geom.intersection(stream_geom))
 
-                for pt in pts:
-                    crossings.append({
-                        "trail": t_name,
-                        "stream_id": sf.id(),
-                        "stream_name": s_name,
-                        "stream_class": s_class,
-                        "x": round(pt.x(), 2),
-                        "y": round(pt.y(), 2),
-                        "point": QgsPointXY(pt.x(), pt.y()),
-                    })
+                    s_name = (
+                        str(sf.attribute(stream_name_field))
+                        if stream_name_field else f"Stream {sf.id()}"
+                    )
+                    if s_name in ("NULL", "None", ""):
+                        s_name = f"Stream {sf.id()}"
 
-        self._crossings_data = crossings
-        self._display_crossings_results(crossings, trail_lyr, streams_lyr, crs_note)
-        self.exportCrossingsButton.setEnabled(bool(crossings))
+                    for pt in pts:
+                        dist_native = trail_geom.lineLocatePoint(
+                            QgsGeometry.fromPointXY(QgsPointXY(pt.x(), pt.y()))
+                        )
+                        all_crossings.append({
+                            "trail": t_name,
+                            "stream_id": sf.id(),
+                            "stream_name": s_name,
+                            "stream_class": stream_class_label,
+                            "fish_bearing": _fish_bearing_from_class(stream_class_label),
+                            "dist_miles": round(dist_native * miles_multiplier, 3),
+                            "x": round(pt.x(), 2),
+                            "y": round(pt.y(), 2),
+                            "point": QgsPointXY(pt.x(), pt.y()),
+                        })
 
-    def _display_crossings_results(self, crossings, trail_lyr=None, streams_lyr=None, crs_note=""):
+        # Sort by trail name, then distance along trail
+        all_crossings.sort(key=lambda c: (c["trail"], c["dist_miles"]))
+
+        self._crossings_data = all_crossings
+        self._add_crossings_to_map(all_crossings, trail_lyr)
+        self._display_crossings_results(all_crossings, trail_lyr, stream_layers, crs_notes)
+        self.exportCrossingsButton.setEnabled(bool(all_crossings))
+
+    def _display_crossings_results(self, crossings, trail_lyr=None, stream_layers=None, crs_notes=None):
+        from collections import defaultdict
+
         if not crossings:
             self.crossingsResultsText.setPlainText(
                 "No stream crossings found.\n\n"
-                "Check that the trail and stream layers overlap spatially\n"
-                "and that the stream layer is loaded in the project."
-                + (f"\n{crs_note}" if crs_note else "")
+                "Check that the trail and hydro layers overlap spatially,\n"
+                "that the correct layers are selected in the list above,\n"
+                "and that at least one hydro layer is loaded in the project."
             )
             return
 
-        hdr_trail = "Trail"
-        hdr_stream = "Stream"
-        hdr_class = "Class"
-        hdr_x = "Easting"
-        hdr_y = "Northing"
-
-        col_trail = max(20, max(len(c["trail"]) for c in crossings) + 2)
-        col_stream = max(20, max(len(c["stream_name"]) for c in crossings) + 2)
-        col_class = max(10, max(len(c["stream_class"]) for c in crossings) + 2)
-
-        layer_info = []
+        lines = []
         if trail_lyr:
-            layer_info.append(f"Trail layer : {trail_lyr.name()}")
-        if streams_lyr:
-            layer_info.append(f"Streams layer: {streams_lyr.name()}")
-        if crs_note:
-            layer_info.append(crs_note)
+            lines.append(f"Trail layer  : {trail_lyr.name()}")
+        if stream_layers:
+            lines.append(f"Hydro layers : {', '.join(l.name() for l in stream_layers)}")
+        if crs_notes:
+            for note in crs_notes:
+                lines.append(f"  ⚠ Reprojected: {note}")
+        lines.append("")
 
-        lines = layer_info + ["", f"Total crossings found: {len(crossings)}", ""]
-        header = (
-            f"{'#':<4} "
-            f"{hdr_trail:<{col_trail}} "
-            f"{hdr_stream:<{col_stream}} "
-            f"{hdr_class:<{col_class}} "
-            f"{hdr_x:<16} {hdr_y}"
+        # ── Per-trail summary ──────────────────────────────────────────
+        trail_groups = defaultdict(list)
+        for c in crossings:
+            trail_groups[c["trail"]].append(c)
+
+        lines.append("═" * 60)
+        lines.append(
+            f"SUMMARY  —  {len(crossings)} crossings  |  {len(trail_groups)} trail(s)"
         )
-        lines.append(header)
-        lines.append("-" * len(header))
+        lines.append("═" * 60)
+
+        for trail_name in sorted(trail_groups):
+            tcs = trail_groups[trail_name]
+            class_counts = defaultdict(int)
+            fish_count = 0
+            for c in tcs:
+                class_counts[c["stream_class"]] += 1
+                if c["fish_bearing"] == "Yes":
+                    fish_count += 1
+
+            class_str = "  ".join(
+                f"{cls}: {cnt}" for cls, cnt in sorted(class_counts.items())
+            )
+            lines.append(f"\n  {trail_name}")
+            lines.append(f"    Crossings : {len(tcs)}   ({class_str})")
+            if fish_count:
+                lines.append(
+                    f"    ⚠ Fish-bearing (Class 2): {fish_count} — ESA analysis required"
+                )
+
+        # ── Detail table ───────────────────────────────────────────────
+        lines += ["", "─" * 60,
+                  "DETAIL  (sorted by trail, then distance along trail)",
+                  "─" * 60]
+
+        col_trail = min(28, max(20, max(len(c["trail"]) for c in crossings) + 1))
+        hdr = (
+            f"{'#':<4} {'Trail':<{col_trail}} {'Class':<10} "
+            f"{'Fish':<8} {'Mi':<8} Stream"
+        )
+        lines.append(hdr)
+        lines.append("-" * len(hdr))
 
         for i, c in enumerate(crossings, 1):
             lines.append(
                 f"{i:<4} "
-                f"{c['trail'][:col_trail-1]:<{col_trail}} "
-                f"{c['stream_name'][:col_stream-1]:<{col_stream}} "
-                f"{c['stream_class'][:col_class-1]:<{col_class}} "
-                f"{c['x']:<16} {c['y']}"
+                f"{c['trail'][:col_trail]:<{col_trail}} "
+                f"{c['stream_class']:<10} "
+                f"{c['fish_bearing']:<8} "
+                f"{c['dist_miles']:<8.3f} "
+                f"{c['stream_name']}"
             )
 
         lines += [
             "",
-            "─" * 40,
-            "Next steps:",
-            "  • Click 'Export to Shapefile' to save crossing points for the NEPA record",
-            "  • Attribute the stream class (Class 2/3/4) for each crossing",
-            "  • Use crossing locations to plan bridge/culvert designs",
+            "─" * 60,
+            "✓ 'Stream Crossings - MTB NEPA' layer added to map canvas.",
+            "  Use 'Export to Shapefile' to save for the NEPA project record.",
+            "  Class 2 crossings flagged 'Yes' for fish-bearing require ESA",
+            "  analysis under Fisheries Task 2.2.",
         ]
 
         self.crossingsResultsText.setPlainText("\n".join(lines))
+
+    def _add_crossings_to_map(self, crossings, trail_lyr):
+        """Create (or replace) a temporary memory layer of crossing points on the map canvas."""
+        from qgis.core import (
+            QgsCategorizedSymbolRenderer, QgsRendererCategory, QgsMarkerSymbol
+        )
+
+        # Remove any previous run's layer
+        for lyr in QgsProject.instance().mapLayersByName("Stream Crossings - MTB NEPA"):
+            QgsProject.instance().removeMapLayer(lyr.id())
+
+        if not crossings:
+            return
+
+        crs_str = trail_lyr.crs().authid() if trail_lyr else "EPSG:4326"
+        mem_layer = QgsVectorLayer(f"Point?crs={crs_str}", "Stream Crossings - MTB NEPA", "memory")
+        provider = mem_layer.dataProvider()
+        provider.addAttributes([
+            QgsField("Trail",      QVariant.String, len=60),
+            QgsField("StreamName", QVariant.String, len=60),
+            QgsField("StrClass",   QVariant.String, len=20),
+            QgsField("FishBear",   QVariant.String, len=10),
+            QgsField("DistMiles",  QVariant.Double),
+            QgsField("Easting",    QVariant.Double),
+            QgsField("Northing",   QVariant.Double),
+        ])
+        mem_layer.updateFields()
+
+        feats = []
+        fields = mem_layer.fields()
+        for c in crossings:
+            feat = QgsFeature(fields)
+            feat.setGeometry(QgsGeometry.fromPointXY(c["point"]))
+            feat.setAttribute("Trail",      c["trail"][:60])
+            feat.setAttribute("StreamName", c["stream_name"][:60])
+            feat.setAttribute("StrClass",   c["stream_class"][:20])
+            feat.setAttribute("FishBear",   c["fish_bearing"][:10])
+            feat.setAttribute("DistMiles",  c["dist_miles"])
+            feat.setAttribute("Easting",    c["x"])
+            feat.setAttribute("Northing",   c["y"])
+            feats.append(feat)
+        provider.addFeatures(feats)
+
+        # Categorized style: color by stream class
+        class_colors = {
+            "Class 1": "#74b9ff",
+            "Class 2": "#0052cc",
+            "Class 3": "#a8a8a8",
+            "Class 4": "#c8c8c8",
+            "Class 5": "#e8e8e8",
+        }
+        categories = []
+        for cls, color in class_colors.items():
+            sym = QgsMarkerSymbol.createSimple({
+                "name": "circle", "color": color, "size": "4",
+                "outline_color": "#222222", "outline_width": "0.4",
+            })
+            categories.append(QgsRendererCategory(cls, sym, cls))
+        default_sym = QgsMarkerSymbol.createSimple({
+            "name": "circle", "color": "#ff6b6b", "size": "4",
+        })
+        categories.append(QgsRendererCategory("", default_sym, "Other/Unknown"))
+        mem_layer.setRenderer(QgsCategorizedSymbolRenderer("StrClass", categories))
+
+        QgsProject.instance().addMapLayer(mem_layer)
+        self.iface.mapCanvas().refresh()
 
     def export_crossings(self):
         if not self._crossings_data:
@@ -914,20 +1052,20 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         crs = trail_lyr.crs() if trail_lyr else QgsCoordinateReferenceSystem("EPSG:4326")
 
         fields = QgsFields()
-        fields.append(QgsField("Trail", QVariant.String, len=60))
+        fields.append(QgsField("Trail",      QVariant.String, len=60))
         fields.append(QgsField("StreamName", QVariant.String, len=60))
-        fields.append(QgsField("StrClass", QVariant.String, len=20))
-        fields.append(QgsField("Easting", QVariant.Double))
-        fields.append(QgsField("Northing", QVariant.Double))
+        fields.append(QgsField("StrClass",   QVariant.String, len=20))
+        fields.append(QgsField("FishBear",   QVariant.String, len=10))
+        fields.append(QgsField("DistMiles",  QVariant.Double))
+        fields.append(QgsField("Easting",    QVariant.Double))
+        fields.append(QgsField("Northing",   QVariant.Double))
 
         writer = QgsVectorFileWriter(
             path, "UTF-8", fields, QgsWkbTypes.Point, crs, "ESRI Shapefile"
         )
-
         if writer.hasError() != QgsVectorFileWriter.NoError:
             QMessageBox.critical(
-                self, "Export Error",
-                f"Could not create shapefile:\n{writer.errorMessage()}"
+                self, "Export Error", f"Could not create shapefile:\n{writer.errorMessage()}"
             )
             return
 
@@ -935,17 +1073,18 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             feat = QgsFeature()
             feat.setGeometry(QgsGeometry.fromPointXY(c["point"]))
             feat.setFields(fields)
-            feat.setAttribute("Trail", c["trail"][:60])
+            feat.setAttribute("Trail",      c["trail"][:60])
             feat.setAttribute("StreamName", c["stream_name"][:60])
-            feat.setAttribute("StrClass", c["stream_class"][:20])
-            feat.setAttribute("Easting", c["x"])
-            feat.setAttribute("Northing", c["y"])
+            feat.setAttribute("StrClass",   c["stream_class"][:20])
+            feat.setAttribute("FishBear",   c["fish_bearing"][:10])
+            feat.setAttribute("DistMiles",  c["dist_miles"])
+            feat.setAttribute("Easting",    c["x"])
+            feat.setAttribute("Northing",   c["y"])
             writer.addFeature(feat)
 
         del writer
-
         QMessageBox.information(
             self, "Export Complete",
-            f"Exported {len(self._crossings_data)} crossing point(s) to:\n{path}\n\n"
-            "Load the shapefile into QGIS to review locations on the map."
+            f"Exported {len(self._crossings_data)} crossing(s) to:\n{path}\n\n"
+            "Attributes: Trail, StreamName, StrClass, FishBear, DistMiles, Easting, Northing"
         )
