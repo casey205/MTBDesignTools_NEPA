@@ -27,6 +27,7 @@ from qgis.core import (
     QgsField,
     QgsFeature,
     QgsCoordinateReferenceSystem,
+    QgsCoordinateTransform,
 )
 
 try:
@@ -754,17 +755,47 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             None
         )
 
-        # Build spatial index over stream features for performance
+        # Build coordinate transform if CRS differs (streams → trail CRS)
+        needs_transform = trail_lyr.crs() != streams_lyr.crs()
+        transform = QgsCoordinateTransform(
+            streams_lyr.crs(), trail_lyr.crs(), QgsProject.instance()
+        ) if needs_transform else None
+
+        crs_note = ""
+        if needs_transform:
+            crs_note = (
+                f"\nNote: stream layer CRS ({streams_lyr.crs().authid()}) differs from "
+                f"trail layer CRS ({trail_lyr.crs().authid()}) — "
+                "geometries reprojected automatically."
+            )
+
+        # Build spatial index over reprojected stream geometries for performance
         self.crossingsResultsText.setPlainText("Running analysis…")
         from qgis.PyQt.QtWidgets import QApplication
         QApplication.processEvents()
 
         stream_index = QgsSpatialIndex()
+        stream_geom_cache = {}
         stream_feature_cache = {}
         for sf in streams_lyr.getFeatures():
-            if sf.geometry():
-                stream_index.insertFeature(sf)
-                stream_feature_cache[sf.id()] = sf
+            geom = sf.geometry()
+            if not geom:
+                continue
+            if transform:
+                geom = QgsGeometry(geom)
+                geom.transform(transform)
+            stream_index.addFeature(sf) if not transform else None
+            stream_geom_cache[sf.id()] = geom
+            stream_feature_cache[sf.id()] = sf
+
+        # When reprojecting, the spatial index must be built from transformed geometries
+        if transform:
+            from qgis.core import QgsFeature as _QgsFeature
+            stream_index = QgsSpatialIndex()
+            for fid, geom in stream_geom_cache.items():
+                tmp = _QgsFeature(fid)
+                tmp.setGeometry(geom)
+                stream_index.addFeature(tmp)
 
         crossings = []
         for trail_feat in trail_features:
@@ -782,7 +813,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 sf = stream_feature_cache.get(sid)
                 if sf is None:
                     continue
-                stream_geom = sf.geometry()
+                stream_geom = stream_geom_cache.get(sid)
                 if not stream_geom or not trail_geom.intersects(stream_geom):
                     continue
 
@@ -806,15 +837,16 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                     })
 
         self._crossings_data = crossings
-        self._display_crossings_results(crossings, trail_lyr, streams_lyr)
+        self._display_crossings_results(crossings, trail_lyr, streams_lyr, crs_note)
         self.exportCrossingsButton.setEnabled(bool(crossings))
 
-    def _display_crossings_results(self, crossings, trail_lyr=None, streams_lyr=None):
+    def _display_crossings_results(self, crossings, trail_lyr=None, streams_lyr=None, crs_note=""):
         if not crossings:
             self.crossingsResultsText.setPlainText(
                 "No stream crossings found.\n\n"
-                "Check that the trail and stream layers are in the same CRS\n"
-                "and that the geometries actually intersect."
+                "Check that the trail and stream layers overlap spatially\n"
+                "and that the stream layer is loaded in the project."
+                + (f"\n{crs_note}" if crs_note else "")
             )
             return
 
@@ -833,6 +865,8 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             layer_info.append(f"Trail layer : {trail_lyr.name()}")
         if streams_lyr:
             layer_info.append(f"Streams layer: {streams_lyr.name()}")
+        if crs_note:
+            layer_info.append(crs_note)
 
         lines = layer_info + ["", f"Total crossings found: {len(crossings)}", ""]
         header = (
