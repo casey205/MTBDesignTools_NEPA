@@ -1169,7 +1169,6 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         )
         miles_mult = distance_multiplier(trail_lyr, "Miles")
 
-        # Convert buffer from feet to trail CRS native units
         buffer_ft = self.habitatBufferSpinBox.value()
         crs_units = trail_lyr.crs().mapUnits()
         ft_to_native = QgsUnitTypes.fromUnitToUnitFactor(
@@ -1178,35 +1177,61 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         buffer_native = buffer_ft * ft_to_native
 
         self.habitatResultsText.setPlainText(
-            f"Running triage across {len(sensitive_layers)} sensitive layer(s)…"
+            f"Running segment triage across {len(sensitive_layers)} layer(s)…"
         )
         QApplication.processEvents()
 
-        # Pre-build spatial index + reprojected geometry cache per sensitive layer
-        layer_index_cache = {}
+        # Build reprojected geometry cache + spatial index per sensitive layer
+        # Each layer stores "direct zone" (for RED) and "buffer zone" (for YELLOW)
+        layer_zones = {}
         for sens_lyr in sensitive_layers:
             needs_transform = trail_lyr.crs() != sens_lyr.crs()
             transform = QgsCoordinateTransform(
                 sens_lyr.crs(), trail_lyr.crs(), QgsProject.instance()
             ) if needs_transform else None
 
-            geom_cache = {}
+            is_line_lyr = sens_lyr.geometryType() == QgsWkbTypes.LineGeometry
+
+            geom_direct = {}  # fid → direct zone geometry (polygon for intersection)
+            geom_buffer = {}  # fid → buffered zone geometry
+
             for sf in sens_lyr.getFeatures():
-                geom = sf.geometry()
-                if not geom:
+                g = sf.geometry()
+                if not g:
                     continue
                 if transform:
-                    geom = QgsGeometry(geom)
-                    geom.transform(transform)
-                geom_cache[sf.id()] = geom
+                    g = QgsGeometry(g)
+                    g.transform(transform)
 
-            idx = QgsSpatialIndex()
-            for fid, geom in geom_cache.items():
+                if is_line_lyr:
+                    # For line layers: a small buffer creates the "direct" zone,
+                    # a larger buffer creates the "adjacent" zone
+                    direct = g.buffer(max(buffer_native * 0.05, ft_to_native * 2), 4)
+                    buf = g.buffer(buffer_native, 6) if buffer_native > 0 else direct
+                else:
+                    direct = g
+                    buf = g.buffer(buffer_native, 6) if buffer_native > 0 else g
+
+                geom_direct[sf.id()] = direct
+                geom_buffer[sf.id()] = buf
+
+            idx_direct = QgsSpatialIndex()
+            for fid, g in geom_direct.items():
                 tmp = QgsFeature(fid)
-                tmp.setGeometry(geom)
-                idx.addFeature(tmp)
+                tmp.setGeometry(g)
+                idx_direct.addFeature(tmp)
 
-            layer_index_cache[sens_lyr.id()] = (idx, geom_cache, sens_lyr.name())
+            idx_buffer = QgsSpatialIndex()
+            for fid, g in geom_buffer.items():
+                tmp = QgsFeature(fid)
+                tmp.setGeometry(g)
+                idx_buffer.addFeature(tmp)
+
+            layer_zones[sens_lyr.id()] = (
+                idx_direct, geom_direct,
+                idx_buffer, geom_buffer,
+                sens_lyr.name()
+            )
 
         results = []
         for trail_feat in trail_features:
@@ -1219,49 +1244,120 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 if trail_name_field else f"Trail {trail_feat.id()}"
             )
             trail_miles = trail_geom.length() * miles_mult
+            trail_bbox = trail_geom.boundingBox()
 
-            # Buffer geometry for YELLOW proximity check
-            buffered_geom = trail_geom.buffer(buffer_native, 8) if buffer_native > 0 else None
-
-            triage = "GREEN"
-            red_layers = []
-            yellow_layers = []
+            # Build union of ALL direct zones and buffer zones across all layers
+            # Also track per-layer miles for the detail table
+            all_direct_union = QgsGeometry()
+            all_buffer_union = QgsGeometry()
+            layer_detail = {}  # {layer_name: {"red_mi": x, "yellow_mi": y}}
 
             for sens_lyr in sensitive_layers:
-                idx, geom_cache, lyr_name = layer_index_cache[sens_lyr.id()]
+                idx_d, geom_d, idx_b, geom_b, lyr_name = layer_zones[sens_lyr.id()]
 
-                # Check candidates from spatial index against buffered bbox
-                check_bbox = (
-                    buffered_geom.boundingBox() if buffered_geom
-                    else trail_geom.boundingBox()
-                )
-                for fid in idx.intersects(check_bbox):
-                    sg = geom_cache.get(fid)
-                    if not sg:
-                        continue
+                # Collect direct zone polygons that touch the trail
+                lyr_direct_union = QgsGeometry()
+                for fid in idx_d.intersects(trail_bbox):
+                    g = geom_d.get(fid)
+                    if g and trail_geom.intersects(g):
+                        lyr_direct_union = (
+                            lyr_direct_union.combine(g)
+                            if not lyr_direct_union.isEmpty() else QgsGeometry(g)
+                        )
 
-                    if trail_geom.intersects(sg):
-                        if lyr_name not in red_layers:
-                            red_layers.append(lyr_name)
-                        triage = "RED"
-                        break  # no need to check more features in this layer
-                    elif buffered_geom and buffered_geom.intersects(sg):
-                        if lyr_name not in yellow_layers:
-                            yellow_layers.append(lyr_name)
-                        if triage == "GREEN":
-                            triage = "YELLOW"
+                # Collect buffer zone polygons near the trail
+                expanded_bbox = trail_geom.buffer(buffer_native, 4).boundingBox() if buffer_native > 0 else trail_bbox
+                lyr_buffer_union = QgsGeometry()
+                for fid in idx_b.intersects(expanded_bbox):
+                    g = geom_b.get(fid)
+                    if g and trail_geom.intersects(g):
+                        lyr_buffer_union = (
+                            lyr_buffer_union.combine(g)
+                            if not lyr_buffer_union.isEmpty() else QgsGeometry(g)
+                        )
+
+                # Per-layer segment miles
+                if not lyr_direct_union.isEmpty():
+                    lyr_red_geom = trail_geom.intersection(lyr_direct_union)
+                    lyr_red_mi = lyr_red_geom.length() * miles_mult if not lyr_red_geom.isEmpty() else 0.0
+                else:
+                    lyr_red_mi = 0.0
+
+                if not lyr_buffer_union.isEmpty():
+                    lyr_buf_geom = trail_geom.intersection(lyr_buffer_union)
+                    if not lyr_direct_union.isEmpty():
+                        lyr_ylw_geom = lyr_buf_geom.difference(lyr_direct_union)
+                    else:
+                        lyr_ylw_geom = lyr_buf_geom
+                    lyr_ylw_mi = lyr_ylw_geom.length() * miles_mult if not lyr_ylw_geom.isEmpty() else 0.0
+                else:
+                    lyr_ylw_mi = 0.0
+
+                if lyr_red_mi > 0.001 or lyr_ylw_mi > 0.001:
+                    layer_detail[lyr_name] = {
+                        "red_mi": round(lyr_red_mi, 4),
+                        "yellow_mi": round(lyr_ylw_mi, 4),
+                    }
+
+                # Accumulate into global unions
+                if not lyr_direct_union.isEmpty():
+                    all_direct_union = (
+                        all_direct_union.combine(lyr_direct_union)
+                        if not all_direct_union.isEmpty() else QgsGeometry(lyr_direct_union)
+                    )
+                if not lyr_buffer_union.isEmpty():
+                    all_buffer_union = (
+                        all_buffer_union.combine(lyr_buffer_union)
+                        if not all_buffer_union.isEmpty() else QgsGeometry(lyr_buffer_union)
+                    )
+
+            # Compute trail segment geometries (actual line portions)
+            if all_direct_union.isEmpty():
+                red_geom = QgsGeometry()
+            else:
+                red_geom = trail_geom.intersection(all_direct_union)
+
+            if all_buffer_union.isEmpty():
+                yellow_geom = QgsGeometry()
+                green_geom = trail_geom
+            else:
+                buf_portion = trail_geom.intersection(all_buffer_union)
+                if all_direct_union.isEmpty():
+                    yellow_geom = buf_portion
+                else:
+                    yellow_geom = buf_portion.difference(all_direct_union)
+                green_geom = trail_geom.difference(all_buffer_union)
+
+            def _safe_miles(g):
+                return g.length() * miles_mult if (g and not g.isEmpty()) else 0.0
+
+            red_miles = round(_safe_miles(red_geom), 4)
+            yellow_miles = round(_safe_miles(yellow_geom), 4)
+            green_miles = round(_safe_miles(green_geom), 4)
+
+            # Overall triage = worst segment present
+            if red_miles > 0.001:
+                triage = "RED"
+            elif yellow_miles > 0.001:
+                triage = "YELLOW"
+            else:
+                triage = "GREEN"
 
             results.append({
-                "trail": t_name,
-                "triage": triage,
-                "miles": trail_miles,
-                "red_layers": red_layers,
-                "yellow_layers": yellow_layers,
-                "geom": trail_geom,
-                "fid": trail_feat.id(),
+                "trail":        t_name,
+                "triage":       triage,
+                "miles":        trail_miles,
+                "red_miles":    red_miles,
+                "yellow_miles": yellow_miles,
+                "green_miles":  green_miles,
+                "layer_detail": layer_detail,
+                "red_geom":     red_geom,
+                "yellow_geom":  yellow_geom,
+                "green_geom":   green_geom,
+                "geom":         trail_geom,
+                "fid":          trail_feat.id(),
             })
 
-        # Sort: RED first, then YELLOW, then GREEN; alphabetical within each
         _order = {"RED": 0, "YELLOW": 1, "GREEN": 2}
         results.sort(key=lambda r: (_order[r["triage"]], r["trail"]))
 
@@ -1277,57 +1373,66 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             self.habitatResultsText.setPlainText("No results.")
             return
 
-        counts = defaultdict(int)
-        miles_by_triage = defaultdict(float)
-        for r in results:
-            counts[r["triage"]] += 1
-            miles_by_triage[r["triage"]] += r["miles"]
-
-        total_miles = sum(r["miles"] for r in results)
+        total_red_mi    = sum(r["red_miles"]    for r in results)
+        total_yellow_mi = sum(r["yellow_miles"] for r in results)
+        total_green_mi  = sum(r["green_miles"]  for r in results)
+        total_mi        = sum(r["miles"]        for r in results)
+        n_red    = sum(1 for r in results if r["triage"] == "RED")
+        n_yellow = sum(1 for r in results if r["triage"] == "YELLOW")
+        n_green  = sum(1 for r in results if r["triage"] == "GREEN")
 
         lines = [
-            f"Sensitive layers analysed : {', '.join(l.name() for l in sensitive_layers)}",
-            f"Proximity buffer          : {buffer_ft} ft",
+            f"Sensitive layers : {', '.join(l.name() for l in sensitive_layers)}",
+            f"Buffer           : {buffer_ft} ft",
             "",
-            "═" * 62,
-            "TRIAGE SUMMARY",
-            "═" * 62,
-            f"  🔴 RED    (direct intersection) : "
-            f"{counts['RED']:>3} trail(s)   {miles_by_triage['RED']:>6.2f} mi",
-            f"  🟡 YELLOW (within {buffer_ft:>3} ft buffer) : "
-            f"{counts['YELLOW']:>3} trail(s)   {miles_by_triage['YELLOW']:>6.2f} mi",
-            f"  🟢 GREEN  (clear)               : "
-            f"{counts['GREEN']:>3} trail(s)   {miles_by_triage['GREEN']:>6.2f} mi",
-            f"  {'─'*48}",
-            f"  Total                           : "
-            f"{len(results):>3} trail(s)   {total_miles:>6.2f} mi",
+            "═" * 66,
+            "SEGMENT-LEVEL TRIAGE SUMMARY",
+            "═" * 66,
+            f"  {'Category':<30} {'Trails':>7}  {'Miles in zone':>14}",
+            f"  {'─'*56}",
+            f"  {'🔴 RED   (direct intersection)':<30} {n_red:>7}  {total_red_mi:>14.3f}",
+            f"  {'🟡 YELLOW (within ' + str(buffer_ft) + ' ft)':<30} {n_yellow:>7}  {total_yellow_mi:>14.3f}",
+            f"  {'🟢 GREEN  (clear)':<30} {n_green:>7}  {total_green_mi:>14.3f}",
+            f"  {'─'*56}",
+            f"  {'Total project':<30} {len(results):>7}  {total_mi:>14.3f}",
             "",
-            "  GREEN trails are candidates for Categorical Exclusion.",
-            "  RED trails require EA-level analysis.",
+            "  GREEN trails with zero RED/YELLOW miles → CE candidates.",
+            "  RED miles = exact conflict length to reroute or analyze.",
             "",
         ]
 
-        # Detail by triage level
-        for label, color in [("RED", "🔴"), ("YELLOW", "🟡"), ("GREEN", "🟢")]:
-            group = [r for r in results if r["triage"] == label]
-            if not group:
-                continue
-            lines.append(f"{'─'*62}")
-            lines.append(f"{color} {label} TRAILS")
-            lines.append(f"{'─'*62}")
-            for r in group:
-                lines.append(f"\n  {r['trail']}  ({r['miles']:.2f} mi)")
-                if r["red_layers"]:
-                    lines.append(f"    Intersects : {', '.join(r['red_layers'])}")
-                if r["yellow_layers"]:
-                    lines.append(f"    Adjacent   : {', '.join(r['yellow_layers'])}")
-                if not r["red_layers"] and not r["yellow_layers"]:
-                    lines.append(f"    No sensitive layer conflicts")
-            lines.append("")
+        # Per-trail detail table
+        lines += ["─" * 66, "PER-TRAIL BREAKDOWN", "─" * 66]
+        col = min(28, max(12, max(len(r["trail"]) for r in results) + 1))
+        hdr = (
+            f"  {'Trail':<{col}} {'Total':>6}  "
+            f"{'RED mi':>7}  {'YLW mi':>7}  {'GRN mi':>7}  Conflict layers"
+        )
+        lines.append(hdr)
+        lines.append("  " + "─" * (len(hdr) - 2))
+
+        for r in results:
+            icon = {"RED": "🔴", "YELLOW": "🟡", "GREEN": "🟢"}[r["triage"]]
+            conflict = ""
+            if r["layer_detail"]:
+                parts = []
+                for lyr_name, d in sorted(r["layer_detail"].items()):
+                    if d["red_mi"] > 0.001:
+                        parts.append(f"{lyr_name} ({d['red_mi']:.3f}mi)")
+                    elif d["yellow_mi"] > 0.001:
+                        parts.append(f"{lyr_name} ~{d['yellow_mi']:.3f}mi")
+                conflict = ", ".join(parts)
+
+            lines.append(
+                f"{icon} {r['trail'][:col]:<{col}} {r['miles']:>6.2f}  "
+                f"{r['red_miles']:>7.3f}  {r['yellow_miles']:>7.3f}  "
+                f"{r['green_miles']:>7.3f}  {conflict}"
+            )
 
         lines += [
-            "─" * 62,
-            "✓ 'Trail Triage - MTB NEPA' layer added to map canvas.",
+            "",
+            "─" * 66,
+            "✓ 'Trail Triage - MTB NEPA' layer added to map (segments colored RED/YLW/GRN).",
             "  Use 'Export Triage Shapefile' to save for the NEPA scoping memo.",
         ]
 
@@ -1346,45 +1451,65 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
 
         crs_str = trail_lyr.crs().authid() if trail_lyr else "EPSG:4326"
         mem_layer = QgsVectorLayer(
-            f"LineString?crs={crs_str}", "Trail Triage - MTB NEPA", "memory"
+            f"MultiLineString?crs={crs_str}", "Trail Triage - MTB NEPA", "memory"
         )
         provider = mem_layer.dataProvider()
         provider.addAttributes([
-            QgsField("Trail",    QVariant.String, len=60),
-            QgsField("Triage",   QVariant.String, len=10),
-            QgsField("Miles",    QVariant.Double),
-            QgsField("RedLyrs",  QVariant.String, len=250),
-            QgsField("YlwLyrs",  QVariant.String, len=250),
+            QgsField("Trail",   QVariant.String, len=60),
+            QgsField("SegType", QVariant.String, len=10),  # RED / YELLOW / GREEN
+            QgsField("Miles",   QVariant.Double),
+            QgsField("Layers",  QVariant.String, len=250),
         ])
         mem_layer.updateFields()
-
-        feats = []
         fields = mem_layer.fields()
+
+        seg_configs = [
+            ("red_geom",    "RED",    "#e74c3c", "1.4"),
+            ("yellow_geom", "YELLOW", "#f39c12", "1.1"),
+            ("green_geom",  "GREEN",  "#27ae60", "0.8"),
+        ]
+
+        mi_mult = distance_multiplier(trail_lyr, "Miles")
+        feats = []
         for r in results:
-            feat = QgsFeature(fields)
-            feat.setGeometry(r["geom"])
-            feat.setAttribute("Trail",   r["trail"][:60])
-            feat.setAttribute("Triage",  r["triage"])
-            feat.setAttribute("Miles",   round(r["miles"], 4))
-            feat.setAttribute("RedLyrs", ", ".join(r["red_layers"])[:250])
-            feat.setAttribute("YlwLyrs", ", ".join(r["yellow_layers"])[:250])
-            feats.append(feat)
+            for geom_key, seg_type, _color, _width in seg_configs:
+                seg_geom = r.get(geom_key)
+                if not seg_geom or seg_geom.isEmpty():
+                    continue
+                seg_mi = seg_geom.length() * mi_mult
+                if seg_mi < 0.0001:
+                    continue
+
+                # Attribution: which layers contributed to this segment
+                lyr_parts = []
+                for lyr_name, d in r["layer_detail"].items():
+                    if seg_type == "RED" and d["red_mi"] > 0.001:
+                        lyr_parts.append(lyr_name)
+                    elif seg_type == "YELLOW" and d["yellow_mi"] > 0.001:
+                        lyr_parts.append(lyr_name)
+
+                feat = QgsFeature(fields)
+                feat.setGeometry(seg_geom)
+                feat.setAttribute("Trail",   r["trail"][:60])
+                feat.setAttribute("SegType", seg_type)
+                feat.setAttribute("Miles",   round(seg_mi, 4))
+                feat.setAttribute("Layers",  ", ".join(lyr_parts)[:250])
+                feats.append(feat)
+
         provider.addFeatures(feats)
 
-        # Categorized line style by triage
-        triage_styles = {
-            "RED":    ("#e74c3c", "1.2"),
-            "YELLOW": ("#f39c12", "1.0"),
+        # Categorized style by SegType
+        styles = {
+            "RED":    ("#e74c3c", "1.4"),
+            "YELLOW": ("#f39c12", "1.1"),
             "GREEN":  ("#27ae60", "0.8"),
         }
         categories = []
-        for triage, (color, width) in triage_styles.items():
-            sym = QgsLineSymbol.createSimple({
-                "color": color, "width": width,
-            })
-            categories.append(QgsRendererCategory(triage, sym, triage))
+        for seg_type, (color, width) in styles.items():
+            sym = QgsLineSymbol.createSimple({"color": color, "width": width})
+            categories.append(QgsRendererCategory(seg_type, sym, seg_type))
 
-        mem_layer.setRenderer(QgsCategorizedSymbolRenderer("Triage", categories))
+        mem_layer.setRenderer(QgsCategorizedSymbolRenderer("SegType", categories))
         QgsProject.instance().addMapLayer(mem_layer)
         self.iface.mapCanvas().refresh()
 
@@ -1404,13 +1529,12 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
 
         fields = QgsFields()
         fields.append(QgsField("Trail",   QVariant.String, len=60))
-        fields.append(QgsField("Triage",  QVariant.String, len=10))
+        fields.append(QgsField("SegType", QVariant.String, len=10))
         fields.append(QgsField("Miles",   QVariant.Double))
-        fields.append(QgsField("RedLyrs", QVariant.String, len=250))
-        fields.append(QgsField("YlwLyrs", QVariant.String, len=250))
+        fields.append(QgsField("Layers",  QVariant.String, len=250))
 
         writer = QgsVectorFileWriter(
-            path, "UTF-8", fields, QgsWkbTypes.LineString, crs, "ESRI Shapefile"
+            path, "UTF-8", fields, QgsWkbTypes.MultiLineString, crs, "ESRI Shapefile"
         )
         if writer.hasError() != QgsVectorFileWriter.NoError:
             QMessageBox.critical(
@@ -1418,24 +1542,48 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             )
             return
 
+        miles_mult = distance_multiplier(trail_lyr, "Miles")
+        seg_configs = [
+            ("red_geom",    "RED"),
+            ("yellow_geom", "YELLOW"),
+            ("green_geom",  "GREEN"),
+        ]
+
         for r in self._habitat_data:
-            feat = QgsFeature()
-            feat.setGeometry(r["geom"])
-            feat.setFields(fields)
-            feat.setAttribute("Trail",   r["trail"][:60])
-            feat.setAttribute("Triage",  r["triage"])
-            feat.setAttribute("Miles",   round(r["miles"], 4))
-            feat.setAttribute("RedLyrs", ", ".join(r["red_layers"])[:250])
-            feat.setAttribute("YlwLyrs", ", ".join(r["yellow_layers"])[:250])
-            writer.addFeature(feat)
+            for geom_key, seg_type in seg_configs:
+                seg_geom = r.get(geom_key)
+                if not seg_geom or seg_geom.isEmpty():
+                    continue
+                seg_mi = seg_geom.length() * miles_mult
+                if seg_mi < 0.0001:
+                    continue
+
+                lyr_parts = []
+                for lyr_name, d in r["layer_detail"].items():
+                    if seg_type == "RED" and d["red_mi"] > 0.001:
+                        lyr_parts.append(lyr_name)
+                    elif seg_type == "YELLOW" and d["yellow_mi"] > 0.001:
+                        lyr_parts.append(lyr_name)
+
+                feat = QgsFeature()
+                feat.setGeometry(seg_geom)
+                feat.setFields(fields)
+                feat.setAttribute("Trail",   r["trail"][:60])
+                feat.setAttribute("SegType", seg_type)
+                feat.setAttribute("Miles",   round(seg_mi, 4))
+                feat.setAttribute("Layers",  ", ".join(lyr_parts)[:250])
+                writer.addFeature(feat)
 
         del writer
-        red = sum(1 for r in self._habitat_data if r["triage"] == "RED")
-        yellow = sum(1 for r in self._habitat_data if r["triage"] == "YELLOW")
-        green = sum(1 for r in self._habitat_data if r["triage"] == "GREEN")
+
+        red_mi    = sum(r["red_miles"]    for r in self._habitat_data)
+        yellow_mi = sum(r["yellow_miles"] for r in self._habitat_data)
+        green_mi  = sum(r["green_miles"]  for r in self._habitat_data)
         QMessageBox.information(
             self, "Export Complete",
-            f"Exported {len(self._habitat_data)} trail(s) to:\n{path}\n\n"
-            f"🔴 RED: {red}   🟡 YELLOW: {yellow}   🟢 GREEN: {green}\n\n"
-            "Attributes: Trail, Triage, Miles, RedLyrs, YlwLyrs"
+            f"Exported trail segments to:\n{path}\n\n"
+            f"🔴 RED    : {red_mi:.3f} mi\n"
+            f"🟡 YELLOW : {yellow_mi:.3f} mi\n"
+            f"🟢 GREEN  : {green_mi:.3f} mi\n\n"
+            "Attributes: Trail, SegType, Miles, Layers"
         )
