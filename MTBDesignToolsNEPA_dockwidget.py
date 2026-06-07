@@ -996,26 +996,34 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         for c in crossings:
             trail_groups[c["trail"]].append(c)
 
-        total_fb = sum(1 for c in crossings if c["fish_bearing"] == "Yes")
+        total_fb  = sum(1 for c in crossings if c["fish_bearing"] == "Yes")
+        total_c3  = sum(1 for c in crossings if c.get("stream_class") == "Class 3")
+        total_c45 = sum(1 for c in crossings if c.get("stream_class") in ("Class 4", "Class 5"))
         total_nfb = len(crossings) - total_fb
 
         lines.append("═" * 60)
         lines.append(
             f"SUMMARY  —  {len(crossings)} total crossings  |  {len(trail_groups)} trail(s)"
         )
-        lines.append(
-            f"           {total_fb} fish-bearing (Class 1/2)  |  {total_nfb} non-fish-bearing (Class 3-5)"
-        )
+        lines.append("═" * 60)
+        lines.append(f"  Class 1 & 2 (fish-bearing)       : {total_fb:>3}  → specify crossing type below")
+        lines.append(f"  Class 3     (field verify)        : {total_c3:>3}  → recommend field survey")
+        lines.append(f"  Class 4 & 5 (non-fish-bearing)   : {total_c45:>3}  → GIS documentation only")
+        lines.append(f"  {'─'*46}")
+        lines.append(f"  Total                             : {len(crossings):>3}")
         lines.append("═" * 60)
 
         for trail_name in sorted(trail_groups):
             tcs = trail_groups[trail_name]
             class_counts = defaultdict(int)
             fish_count = 0
+            c3_count = 0
             for c in tcs:
                 class_counts[c["stream_class"]] += 1
                 if c["fish_bearing"] == "Yes":
                     fish_count += 1
+                if c.get("stream_class") == "Class 3":
+                    c3_count += 1
 
             class_str = "  ".join(
                 f"{cls}: {cnt}" for cls, cnt in sorted(class_counts.items())
@@ -1024,7 +1032,11 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             lines.append(f"    Crossings : {len(tcs)}   ({class_str})")
             if fish_count:
                 lines.append(
-                    f"    ⚠ Fish-bearing: {fish_count} — specify crossing type in table below"
+                    f"    ⚠ Fish-bearing (Class 1/2): {fish_count} — specify crossing type in table below"
+                )
+            if c3_count:
+                lines.append(
+                    f"    ⚑ Class 3: {c3_count} — field verify fish distribution boundary"
                 )
 
         lines += [
@@ -1925,15 +1937,24 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             # Capture any crossing types / notes the user has entered in the table
             self._read_fish_crossing_annotations()
 
-            total   = len(self._crossings_data)
-            fb_list = [c for c in self._crossings_data if c.get("fish_bearing") == "Yes"]
+            total    = len(self._crossings_data)
+            fb_list  = [c for c in self._crossings_data if c.get("fish_bearing") == "Yes"]
+            c3_list  = [c for c in self._crossings_data if c.get("stream_class") == "Class 3"]
+            c45_list = [c for c in self._crossings_data
+                        if c.get("stream_class") in ("Class 4", "Class 5")]
             fb_count  = len(fb_list)
+            c3_count  = len(c3_list)
+            c45_count = len(c45_list)
             nfb_count = total - fb_count
 
             lines += [
-                f"  Total stream crossings     : {total}",
-                f"  Fish-bearing (Class 1 & 2) : {fb_count}",
-                f"  Non-fish-bearing (Class 3-5): {nfb_count}",
+                f"  {'Class':<30} {'Count':>6}  Survey Approach",
+                f"  {'─'*62}",
+                f"  {'Class 1 & 2 (fish-bearing)':<30} {fb_count:>6}  Field-documented; specify crossing type",
+                f"  {'Class 3 (field verify)':<30} {c3_count:>6}  Recommend field survey — fish distribution boundary",
+                f"  {'Class 4 & 5 (non-fish-bearing)':<30} {c45_count:>6}  GIS documentation only",
+                f"  {'─'*62}",
+                f"  {'Total':<30} {total:>6}",
                 "",
             ]
 
@@ -1990,6 +2011,18 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 lines.append(
                     "  The proposed alignment avoids all mapped fish-bearing streams."
                 )
+
+            # ── Class 3 field survey recommendation ───────────────────
+            if c3_count > 0:
+                lines += [
+                    "",
+                    f"  Class 3 Stream Crossings (n={c3_count}) — Field Survey Recommended:",
+                    "  Class 3 streams are mapped as non-fish-bearing based on preliminary",
+                    "  LiDAR-derived stream classification. Per Task 2.2.1(b), field surveys",
+                    f"  are recommended at all {c3_count} Class 3 crossing(s) to verify fish",
+                    "  distribution boundaries and confirm non-fish-bearing status.",
+                    "  Class 4 and 5 crossings are proposed for GIS documentation only.",
+                ]
 
             # ── Class 3-5 optional notes ───────────────────────────────
             nfb_note = self.crossingsNFBNotesEdit.toPlainText().strip()
