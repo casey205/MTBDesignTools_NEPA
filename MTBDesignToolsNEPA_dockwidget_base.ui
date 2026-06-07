@@ -504,6 +504,9 @@
         <string>Habitat Overlap</string>
        </attribute>
        <layout class="QVBoxLayout" name="habitatTabLayout">
+        <property name="spacing">
+         <number>6</number>
+        </property>
         <property name="leftMargin">
          <number>6</number>
         </property>
@@ -516,42 +519,224 @@
         <property name="bottomMargin">
          <number>6</number>
         </property>
+
         <item>
-         <widget class="QLabel" name="habitatComingSoonLabel">
+         <widget class="QLabel" name="habitatInfoLabel">
           <property name="text">
-           <string>Coming soon: Habitat &amp; Sensitive Species Overlap
-
-This tool will intersect the trail corridor against loaded sensitive area layers (NSO habitat, Critical Habitat, Riparian Reserves, spotted frog areas, pond turtle sites, etc.) and generate a summary table for Biological Evaluations and the LAA Pre-reporting document.
-
-Load your USFS corporate GIS layers into the project, then return here to run the overlap analysis.</string>
+           <string>Intersects each trail against sensitive area layers. Classifies trails as RED (direct intersection), YELLOW (within buffer), or GREEN (clear). Load USFS corporate GIS layers first.</string>
           </property>
           <property name="wordWrap">
            <bool>true</bool>
           </property>
-          <property name="alignment">
-           <set>Qt::AlignTop|Qt::AlignLeft</set>
-          </property>
           <property name="styleSheet">
-           <string>color: #555; padding: 8px;</string>
+           <string>color: #555; font-style: italic;</string>
           </property>
          </widget>
         </item>
+
+        <!-- Sensitive layers header -->
         <item>
-         <spacer name="habitatSpacer">
-          <property name="orientation">
-           <enum>Qt::Vertical</enum>
+         <layout class="QHBoxLayout" name="habitatLayersHeaderRow">
+          <property name="spacing">
+           <number>4</number>
           </property>
-          <property name="sizeType">
-           <enum>QSizePolicy::Expanding</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>0</width>
-            <height>0</height>
-           </size>
-          </property>
-         </spacer>
+          <item>
+           <widget class="QLabel" name="habitatLayersLabel">
+            <property name="text">
+             <string>Sensitive layers (Ctrl+click to multi-select):</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="habitatHeaderStretch">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Expanding</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>0</width>
+              <height>0</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QPushButton" name="selectAllHabitatButton">
+            <property name="text">
+             <string>All</string>
+            </property>
+            <property name="toolTip">
+             <string>Select all sensitive layers</string>
+            </property>
+            <property name="maximumWidth">
+             <number>40</number>
+            </property>
+            <property name="maximumHeight">
+             <number>24</number>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="refreshHabitatButton">
+            <property name="text">
+             <string>↻</string>
+            </property>
+            <property name="toolTip">
+             <string>Refresh layer list from project</string>
+            </property>
+            <property name="maximumWidth">
+             <number>28</number>
+            </property>
+            <property name="maximumHeight">
+             <number>24</number>
+            </property>
+           </widget>
+          </item>
+         </layout>
         </item>
+
+        <!-- Sensitive layers list -->
+        <item>
+         <widget class="QListWidget" name="habitatListWidget">
+          <property name="maximumHeight">
+           <number>120</number>
+          </property>
+          <property name="minimumHeight">
+           <number>60</number>
+          </property>
+          <property name="selectionMode">
+           <enum>QAbstractItemView::ExtendedSelection</enum>
+          </property>
+          <property name="toolTip">
+           <string>Select polygon or line layers representing sensitive areas (NSO habitat, Riparian Reserves, Critical Habitat, wetlands, species occurrence areas, etc.)</string>
+          </property>
+         </widget>
+        </item>
+
+        <!-- Buffer distance row -->
+        <item>
+         <layout class="QHBoxLayout" name="habitatBufferRow">
+          <property name="spacing">
+           <number>4</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="habitatBufferLabel">
+            <property name="text">
+             <string>Proximity buffer:</string>
+            </property>
+            <property name="toolTip">
+             <string>Trails within this distance of a sensitive layer are flagged YELLOW (adjacent) even if they don't directly intersect</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QSpinBox" name="habitatBufferSpinBox">
+            <property name="minimum">
+             <number>0</number>
+            </property>
+            <property name="maximum">
+             <number>1000</number>
+            </property>
+            <property name="value">
+             <number>100</number>
+            </property>
+            <property name="toolTip">
+             <string>Buffer distance in feet for YELLOW (adjacent) classification</string>
+            </property>
+            <property name="maximumWidth">
+             <number>70</number>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="habitatBufferUnitsLabel">
+            <property name="text">
+             <string>feet</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="habitatBufferStretch">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Expanding</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>0</width>
+              <height>0</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+         </layout>
+        </item>
+
+        <!-- Action buttons -->
+        <item>
+         <layout class="QHBoxLayout" name="habitatActionRow">
+          <property name="spacing">
+           <number>4</number>
+          </property>
+          <item>
+           <widget class="QPushButton" name="runHabitatButton">
+            <property name="text">
+             <string>Run Triage Analysis</string>
+            </property>
+            <property name="toolTip">
+             <string>Classify each trail as RED / YELLOW / GREEN based on overlap with selected sensitive layers</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="exportHabitatButton">
+            <property name="text">
+             <string>Export Triage Shapefile…</string>
+            </property>
+            <property name="toolTip">
+             <string>Save trail triage results as a shapefile for the NEPA scoping document</string>
+            </property>
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="habitatActionStretch">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Expanding</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>0</width>
+              <height>0</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+         </layout>
+        </item>
+
+        <!-- Results -->
+        <item>
+         <widget class="QTextEdit" name="habitatResultsText">
+          <property name="readOnly">
+           <bool>true</bool>
+          </property>
+          <property name="placeholderText">
+           <string>Triage results will appear here after running analysis.</string>
+          </property>
+         </widget>
+        </item>
+
        </layout>
       </widget>
 
