@@ -889,8 +889,21 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         self._display_crossings_results(all_crossings, trail_lyr, stream_layers, crs_notes)
         self.exportCrossingsButton.setEnabled(bool(all_crossings))
 
+    # Crossing type options for fish-bearing (Class 1 & 2) crossings
+    CROSSING_TYPES = [
+        "Proposed new crossing",
+        "Existing road bridge (no new work)",
+        "Existing culvert (no new work)",
+        "Existing ford / primitive crossing",
+        "Proposed bridge",
+        "Proposed culvert",
+        "Proposed hardened crossing",
+    ]
+
     def _display_crossings_results(self, crossings, trail_lyr=None, stream_layers=None, crs_notes=None):
         from collections import defaultdict
+        from qgis.PyQt.QtWidgets import QComboBox, QTableWidgetItem
+        from qgis.PyQt.QtCore import Qt as _Qt
 
         if not crossings:
             self.crossingsResultsText.setPlainText(
@@ -899,6 +912,10 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 "that the correct layers are selected in the list above,\n"
                 "and that at least one hydro layer is loaded in the project."
             )
+            self.crossingsFishLabel.setVisible(False)
+            self.crossingsFishTable.setVisible(False)
+            self.crossingsNFBLabel.setVisible(False)
+            self.crossingsNFBNotesEdit.setVisible(False)
             return
 
         lines = []
@@ -911,14 +928,19 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 lines.append(f"  ⚠ Reprojected: {note}")
         lines.append("")
 
-        # ── Per-trail summary ──────────────────────────────────────────
         trail_groups = defaultdict(list)
         for c in crossings:
             trail_groups[c["trail"]].append(c)
 
+        total_fb = sum(1 for c in crossings if c["fish_bearing"] == "Yes")
+        total_nfb = len(crossings) - total_fb
+
         lines.append("═" * 60)
         lines.append(
-            f"SUMMARY  —  {len(crossings)} crossings  |  {len(trail_groups)} trail(s)"
+            f"SUMMARY  —  {len(crossings)} total crossings  |  {len(trail_groups)} trail(s)"
+        )
+        lines.append(
+            f"           {total_fb} fish-bearing (Class 1/2)  |  {total_nfb} non-fish-bearing (Class 3-5)"
         )
         lines.append("═" * 60)
 
@@ -938,42 +960,80 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             lines.append(f"    Crossings : {len(tcs)}   ({class_str})")
             if fish_count:
                 lines.append(
-                    f"    ⚠ Fish-bearing (Class 2): {fish_count} — ESA analysis required"
+                    f"    ⚠ Fish-bearing: {fish_count} — specify crossing type in table below"
                 )
-
-        # ── Detail table ───────────────────────────────────────────────
-        lines += ["", "─" * 60,
-                  "DETAIL  (sorted by trail, then distance along trail)",
-                  "─" * 60]
-
-        col_trail = min(28, max(20, max(len(c["trail"]) for c in crossings) + 1))
-        hdr = (
-            f"{'#':<4} {'Trail':<{col_trail}} {'Class':<10} "
-            f"{'Fish':<8} {'Mi':<8} Stream"
-        )
-        lines.append(hdr)
-        lines.append("-" * len(hdr))
-
-        for i, c in enumerate(crossings, 1):
-            lines.append(
-                f"{i:<4} "
-                f"{c['trail'][:col_trail]:<{col_trail}} "
-                f"{c['stream_class']:<10} "
-                f"{c['fish_bearing']:<8} "
-                f"{c['dist_miles']:<8.3f} "
-                f"{c['stream_name']}"
-            )
 
         lines += [
             "",
-            "─" * 60,
             "✓ 'Stream Crossings - MTB NEPA' layer added to map canvas.",
             "  Use 'Export to Shapefile' to save for the NEPA project record.",
-            "  Class 2 crossings flagged 'Yes' for fish-bearing require ESA",
-            "  analysis under Fisheries Task 2.2.",
         ]
 
         self.crossingsResultsText.setPlainText("\n".join(lines))
+
+        # ── Fish-bearing crossing table (Class 1 & 2 only) ────────────
+        fish_crossings = [c for c in crossings if c["fish_bearing"] == "Yes"]
+        has_fish = bool(fish_crossings)
+
+        self.crossingsFishLabel.setVisible(has_fish)
+        self.crossingsFishTable.setVisible(has_fish)
+        self.crossingsNFBLabel.setVisible(True)
+        self.crossingsNFBNotesEdit.setVisible(True)
+
+        if has_fish:
+            tbl = self.crossingsFishTable
+            tbl.setRowCount(0)
+            tbl.setColumnCount(7)
+            tbl.setHorizontalHeaderLabels(
+                ["#", "Trail", "Mi", "Stream", "Class", "Crossing Type", "Notes"]
+            )
+            tbl.horizontalHeader().setStretchLastSection(True)
+            tbl.setColumnWidth(0, 30)
+            tbl.setColumnWidth(1, 110)
+            tbl.setColumnWidth(2, 45)
+            tbl.setColumnWidth(3, 90)
+            tbl.setColumnWidth(4, 55)
+            tbl.setColumnWidth(5, 185)
+
+            for row_idx, c in enumerate(fish_crossings):
+                tbl.insertRow(row_idx)
+
+                def _ro(text):
+                    item = QTableWidgetItem(str(text))
+                    item.setFlags(item.flags() & ~_Qt.ItemIsEditable)
+                    return item
+
+                tbl.setItem(row_idx, 0, _ro(row_idx + 1))
+                tbl.setItem(row_idx, 1, _ro(c["trail"][:30]))
+                tbl.setItem(row_idx, 2, _ro(f"{c['dist_miles']:.3f}"))
+                tbl.setItem(row_idx, 3, _ro(c["stream_name"][:20]))
+                tbl.setItem(row_idx, 4, _ro(c["stream_class"]))
+
+                combo = QComboBox()
+                combo.addItems(self.CROSSING_TYPES)
+                # Restore previously set type if re-running
+                prev_type = c.get("crossing_type", "")
+                if prev_type in self.CROSSING_TYPES:
+                    combo.setCurrentText(prev_type)
+                tbl.setCellWidget(row_idx, 5, combo)
+
+                notes_item = QTableWidgetItem(c.get("crossing_notes", ""))
+                tbl.setItem(row_idx, 6, notes_item)
+
+            tbl.resizeRowsToContents()
+
+    def _read_fish_crossing_annotations(self):
+        """Read crossing type and notes back from the fish table into _crossings_data."""
+        from qgis.PyQt.QtWidgets import QComboBox
+        if not self._crossings_data:
+            return
+        fish_crossings = [c for c in self._crossings_data if c["fish_bearing"] == "Yes"]
+        tbl = self.crossingsFishTable
+        for row_idx in range(min(tbl.rowCount(), len(fish_crossings))):
+            combo = tbl.cellWidget(row_idx, 5)
+            notes_item = tbl.item(row_idx, 6)
+            fish_crossings[row_idx]["crossing_type"]  = combo.currentText() if combo else ""
+            fish_crossings[row_idx]["crossing_notes"] = notes_item.text() if notes_item else ""
 
     def _add_crossings_to_map(self, crossings, trail_lyr):
         """Create (or replace) a temporary memory layer of crossing points on the map canvas."""
@@ -1046,6 +1106,9 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             QMessageBox.information(self, "Export", "Run the crossing analysis first.")
             return
 
+        # Capture any crossing type / notes the user has entered
+        self._read_fish_crossing_annotations()
+
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Stream Crossings Shapefile", "", "Shapefile (*.shp)"
         )
@@ -1061,6 +1124,8 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         fields.append(QgsField("StrClass",   QVariant.String, len=20))
         fields.append(QgsField("FishBear",   QVariant.String, len=10))
         fields.append(QgsField("DistMiles",  QVariant.Double))
+        fields.append(QgsField("CrossType",  QVariant.String, len=60))
+        fields.append(QgsField("Notes",      QVariant.String, len=200))
         fields.append(QgsField("Easting",    QVariant.Double))
         fields.append(QgsField("Northing",   QVariant.Double))
 
@@ -1082,15 +1147,20 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             feat.setAttribute("StrClass",   c["stream_class"][:20])
             feat.setAttribute("FishBear",   c["fish_bearing"][:10])
             feat.setAttribute("DistMiles",  c["dist_miles"])
+            feat.setAttribute("CrossType",  c.get("crossing_type", "")[:60])
+            feat.setAttribute("Notes",      c.get("crossing_notes", "")[:200])
             feat.setAttribute("Easting",    c["x"])
             feat.setAttribute("Northing",   c["y"])
             writer.addFeature(feat)
 
         del writer
+        fb_count = sum(1 for c in self._crossings_data if c["fish_bearing"] == "Yes")
         QMessageBox.information(
             self, "Export Complete",
             f"Exported {len(self._crossings_data)} crossing(s) to:\n{path}\n\n"
-            "Attributes: Trail, StreamName, StrClass, FishBear, DistMiles, Easting, Northing"
+            f"Fish-bearing (Class 1/2): {fb_count}\n"
+            "Attributes: Trail, StreamName, StrClass, FishBear,\n"
+            "            DistMiles, CrossType, Notes, Easting, Northing"
         )
 
     # ──────────────────────────────────────────────
@@ -1722,53 +1792,80 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             lines.append("  Stream crossing analysis not yet run.")
             lines.append("  Run the Stream Crossings tab first.")
         else:
-            total = len(self._crossings_data)
-            fb_count = sum(1 for c in self._crossings_data if c.get("fish_bearing") == "Yes")
+            # Capture any crossing types / notes the user has entered in the table
+            self._read_fish_crossing_annotations()
+
+            total   = len(self._crossings_data)
+            fb_list = [c for c in self._crossings_data if c.get("fish_bearing") == "Yes"]
+            fb_count  = len(fb_list)
             nfb_count = total - fb_count
 
-            # Count by stream class
-            by_class = defaultdict(int)
-            by_class_fb = defaultdict(int)
-            for c in self._crossings_data:
-                cls = c.get("stream_class", "Unknown")
-                by_class[cls] += 1
-                if c.get("fish_bearing") == "Yes":
-                    by_class_fb[cls] += 1
-
             lines += [
-                f"  Total stream crossings    : {total}",
-                f"  Fish-bearing crossings    : {fb_count}",
-                f"  Non-fish-bearing crossings: {nfb_count}",
+                f"  Total stream crossings     : {total}",
+                f"  Fish-bearing (Class 1 & 2) : {fb_count}",
+                f"  Non-fish-bearing (Class 3-5): {nfb_count}",
                 "",
-                f"  {'Stream Class':<18} {'Crossings':>10}  {'Fish-Bearing':>13}",
-                f"  {'─'*46}",
             ]
-            for cls in sorted(by_class):
+
+            # ── Fish-bearing detail table ──────────────────────────────
+            if fb_list:
+                # Summarise by crossing type
+                existing_types = {
+                    "Existing road bridge (no new work)",
+                    "Existing culvert (no new work)",
+                    "Existing ford / primitive crossing",
+                }
+                existing = [c for c in fb_list if c.get("crossing_type","") in existing_types]
+                proposed = [c for c in fb_list if c.get("crossing_type","") not in existing_types]
+
+                lines += [
+                    f"  Fish-Bearing Crossing Summary:",
+                    f"    Existing structures (no new ground disturbance) : {len(existing)}",
+                    f"    Proposed new crossings                          : {len(proposed)}",
+                    "",
+                    f"  {'#':<4} {'Trail':<28} {'Mi':>6}  {'Class':<10} {'Type':<35} Notes",
+                    f"  {'─'*100}",
+                ]
+                for i, c in enumerate(fb_list, 1):
+                    ctype = c.get("crossing_type", "Proposed new crossing")
+                    notes = c.get("crossing_notes", "")
+                    lines.append(
+                        f"  {i:<4} {c['trail'][:28]:<28} {c['dist_miles']:>6.3f}  "
+                        f"{c['stream_class']:<10} {ctype:<35} {notes}"
+                    )
+
+                # Finding sentence
+                lines.append("")
+                if len(existing) == fb_count:
+                    lines.append(
+                        f"  FINDING: All {fb_count} fish-bearing stream crossing(s) use existing"
+                    )
+                    lines.append(
+                        "  structures. No new ground disturbance proposed at Class 1 or Class 2 streams."
+                    )
+                elif len(proposed) > 0:
+                    lines.append(
+                        f"  NOTE: {len(proposed)} proposed new crossing(s) at fish-bearing streams."
+                    )
+                    lines.append(
+                        "  Hardened crossing structures required per Project Design Features."
+                    )
+                    lines.append(
+                        "  ESA Section 7 informal consultation (Fisheries) likely required."
+                    )
+            else:
                 lines.append(
-                    f"  {cls:<18} {by_class[cls]:>10}  {by_class_fb[cls]:>13}"
+                    "  FINDING: No fish-bearing (Class 1 or Class 2) stream crossings identified."
+                )
+                lines.append(
+                    "  The proposed alignment avoids all mapped fish-bearing streams."
                 )
 
-            # Per-trail breakdown
-            by_trail = defaultdict(list)
-            for c in self._crossings_data:
-                by_trail[c["trail"]].append(c)
-
-            lines += ["", f"  {'Trail':<30} {'Crossings':>9}  {'Fish-Bearing':>13}"]
-            lines.append(f"  {'─'*56}")
-            for trail_name in sorted(by_trail):
-                crossings = by_trail[trail_name]
-                fb = sum(1 for c in crossings if c.get("fish_bearing") == "Yes")
-                lines.append(f"  {trail_name[:30]:<30} {len(crossings):>9}  {fb:>13}")
-
-            lines += [
-                "",
-                "  FINDING: All Class 1 and Class 2 fish-bearing stream crossings"
-                if fb_count == 0 else
-                f"  NOTE: {fb_count} fish-bearing crossing(s) identified — hardened",
-                "  crossing structures required per Project Design Features."
-                if fb_count > 0 else
-                "  have been avoided. No fish-bearing stream crossings proposed.",
-            ]
+            # ── Class 3-5 optional notes ───────────────────────────────
+            nfb_note = self.crossingsNFBNotesEdit.toPlainText().strip()
+            if nfb_count > 0 and nfb_note:
+                lines += ["", f"  Non-Fish-Bearing Crossings (Class 3–5, n={nfb_count}):"]
+                lines.append(f"  {nfb_note}")
 
         # ── Habitat / Trail Triage ──
         lines.append(section("4. SENSITIVE AREA OVERLAP — TRAIL TRIAGE"))

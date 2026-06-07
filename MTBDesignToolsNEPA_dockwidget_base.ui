@@ -478,17 +478,102 @@
          </layout>
         </item>
 
-        <!-- Results -->
+        <!-- Summary text (always visible, short) -->
         <item>
          <widget class="QTextEdit" name="crossingsResultsText">
           <property name="readOnly">
            <bool>true</bool>
           </property>
+          <property name="maximumHeight">
+           <number>110</number>
+          </property>
+          <property name="minimumHeight">
+           <number>60</number>
+          </property>
           <property name="placeholderText">
            <string>Crossing results will appear here after running analysis.</string>
           </property>
-          <property name="fontFamily">
-           <string>Courier New</string>
+         </widget>
+        </item>
+
+        <!-- Fish-bearing crossing table label -->
+        <item>
+         <widget class="QLabel" name="crossingsFishLabel">
+          <property name="text">
+           <string>Fish-Bearing Crossings (Class 1 &amp; 2) — select crossing type for each:</string>
+          </property>
+          <property name="styleSheet">
+           <string>font-weight: bold; color: #003580;</string>
+          </property>
+          <property name="visible">
+           <bool>false</bool>
+          </property>
+         </widget>
+        </item>
+
+        <!-- Fish-bearing crossing table -->
+        <item>
+         <widget class="QTableWidget" name="crossingsFishTable">
+          <property name="visible">
+           <bool>false</bool>
+          </property>
+          <property name="minimumHeight">
+           <number>80</number>
+          </property>
+          <property name="maximumHeight">
+           <number>180</number>
+          </property>
+          <property name="selectionBehavior">
+           <enum>QAbstractItemView::SelectRows</enum>
+          </property>
+          <property name="toolTip">
+           <string>Specify the crossing type for each fish-bearing stream crossing. This information will appear in the NEPA report.</string>
+          </property>
+          <column>
+           <property name="text"><string>#</string></property>
+          </column>
+          <column>
+           <property name="text"><string>Trail</string></property>
+          </column>
+          <column>
+           <property name="text"><string>Mi</string></property>
+          </column>
+          <column>
+           <property name="text"><string>Stream</string></property>
+          </column>
+          <column>
+           <property name="text"><string>Class</string></property>
+          </column>
+          <column>
+           <property name="text"><string>Crossing Type</string></property>
+          </column>
+          <column>
+           <property name="text"><string>Notes</string></property>
+          </column>
+         </widget>
+        </item>
+
+        <!-- Class 3-5 optional notes -->
+        <item>
+         <widget class="QLabel" name="crossingsNFBLabel">
+          <property name="text">
+           <string>Class 3–5 notes (optional — leave blank to omit from report):</string>
+          </property>
+          <property name="visible">
+           <bool>false</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPlainTextEdit" name="crossingsNFBNotesEdit">
+          <property name="visible">
+           <bool>false</bool>
+          </property>
+          <property name="maximumHeight">
+           <number>52</number>
+          </property>
+          <property name="placeholderText">
+           <string>Optional — e.g. "All non-fish-bearing crossings use hardened structures per NFS trail construction standards."</string>
           </property>
          </widget>
         </item>
