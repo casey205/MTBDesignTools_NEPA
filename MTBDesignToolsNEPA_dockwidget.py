@@ -282,11 +282,15 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
 
         self._crossings_data = []
         self._habitat_data = []
+        self._crossings_exported = False  # tracks whether annotations have been exported
 
         self._setup_profile_tab()
         self._setup_crossings_tab()
         self._setup_habitat_tab()
         self._setup_report_tab()
+
+        # Tab-switch guard for unsaved crossing annotations
+        self.mainTabWidget.currentChanged.connect(self._on_tab_changed)
 
         # Refresh pickers when project layers change
         QgsProject.instance().layersAdded.connect(self._on_layers_changed)
@@ -944,6 +948,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         all_crossings.sort(key=lambda c: (c["trail"], c["dist_miles"]))
 
         self._crossings_data = all_crossings
+        self._crossings_exported = False  # new data — annotations not yet exported
         self._add_crossings_to_map(all_crossings, trail_lyr)
         self._display_crossings_results(all_crossings, trail_lyr, stream_layers, crs_notes)
         self.exportCrossingsButton.setEnabled(bool(all_crossings))
@@ -1213,6 +1218,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             writer.addFeature(feat)
 
         del writer
+        self._crossings_exported = True  # annotations are now saved
         fb_count = sum(1 for c in self._crossings_data if c["fish_bearing"] == "Yes")
         QMessageBox.information(
             self, "Export Complete",
@@ -1793,9 +1799,74 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         # Pre-fill date field with today
         self.reportDateEdit.setText(datetime.date.today().strftime("%B %Y"))
 
+    # ── Stream Crossings tab index in mainTabWidget ──────────────────
+    _CROSSINGS_TAB_IDX = 1
+
+    def _on_tab_changed(self, new_idx):
+        """Prompt to export crossing annotations when leaving the Stream Crossings tab."""
+        # Only fire when navigating AWAY from the crossings tab
+        if new_idx == self._CROSSINGS_TAB_IDX:
+            return
+        # Only prompt if there are fish-bearing crossings in the table and they haven't been exported
+        if not self.crossingsFishTable.isVisible():
+            return
+        if self.crossingsFishTable.rowCount() == 0:
+            return
+        if self._crossings_exported:
+            return
+
+        from qgis.PyQt.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self,
+            "Unsaved Crossing Annotations",
+            "You have crossing type selections for fish-bearing streams that haven't been "
+            "exported yet.\n\nExport to shapefile now to preserve them?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            self.export_crossings()
+
     def generate_report(self):
         import datetime
         from collections import defaultdict
+
+        # ── Confirmation dialog if fish-bearing crossing annotations are present ──
+        if self._crossings_data and self.crossingsFishTable.isVisible() and \
+                self.crossingsFishTable.rowCount() > 0:
+            self._read_fish_crossing_annotations()
+            fb_list = [c for c in self._crossings_data if c.get("fish_bearing") == "Yes"]
+            existing_types = {
+                "Existing road bridge (no new work)",
+                "Existing culvert (no new work)",
+                "Existing ford / primitive crossing",
+            }
+            existing = [c for c in fb_list if c.get("crossing_type", "") in existing_types]
+            proposed = [c for c in fb_list if c.get("crossing_type", "") not in existing_types]
+
+            summary_lines = [
+                f"Fish-bearing crossings found: {len(fb_list)}",
+                f"  Existing structures (no new work) : {len(existing)}",
+                f"  Proposed new crossings            : {len(proposed)}",
+                "",
+            ]
+            for c in fb_list:
+                ctype = c.get("crossing_type", "Proposed new crossing")
+                notes = f"  [{c.get('crossing_notes', '')}]" if c.get("crossing_notes") else ""
+                summary_lines.append(f"  • {c['trail']} @ {c['dist_miles']:.3f} mi — {ctype}{notes}")
+
+            summary_lines += ["", "Generate the screening memo with these crossing types?"]
+
+            from qgis.PyQt.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self,
+                "Confirm Crossing Types",
+                "\n".join(summary_lines),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if reply == QMessageBox.No:
+                return
 
         proj_name  = self.reportProjectNameEdit.text().strip() or "[Project Name]"
         forest     = self.reportForestEdit.text().strip()      or "[Forest / Unit]"
