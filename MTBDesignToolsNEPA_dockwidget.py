@@ -350,11 +350,12 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         )
 
     def _setup_crossings_tab(self):
-        self.refreshStreamsButton.clicked.connect(self.populate_streams_list)
+        self.refreshStreamsButton.clicked.connect(self._refresh_crossings_tab)
+        self.streamsGroupCombo.currentIndexChanged.connect(self.populate_streams_list)
         self.selectAllStreamsButton.clicked.connect(self._select_all_streams)
         self.runCrossingsButton.clicked.connect(self.run_crossing_analysis)
         self.exportCrossingsButton.clicked.connect(self.export_crossings)
-        self.populate_streams_list()
+        self._refresh_crossings_tab()
 
         from qgis.PyQt.QtGui import QFont
         self.crossingsResultsText.setFont(QFont("Courier New", 9))
@@ -362,8 +363,35 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
     def _on_layers_changed(self, *_args):
         self.populate_trail_dropdown()
         self.populate_dem_dropdown()
-        self.populate_streams_list()
+        self._refresh_crossings_tab()
         self.populate_habitat_list()
+
+    def _refresh_crossings_tab(self, *_args):
+        """Repopulate group combo then hydro layer list."""
+        self._populate_streams_groups()
+        self.populate_streams_list()
+
+    def _populate_streams_groups(self):
+        """Fill streamsGroupCombo with all QGIS layer-tree group names."""
+        from qgis.core import QgsLayerTreeGroup
+
+        prev = self.streamsGroupCombo.currentText()
+        self.streamsGroupCombo.blockSignals(True)
+        self.streamsGroupCombo.clear()
+        self.streamsGroupCombo.addItem("(All layers)", None)
+
+        def _walk(node, prefix=""):
+            for child in node.children():
+                if isinstance(child, QgsLayerTreeGroup):
+                    full_name = f"{prefix}/{child.name()}" if prefix else child.name()
+                    self.streamsGroupCombo.addItem(full_name, full_name)
+                    _walk(child, full_name)
+
+        _walk(QgsProject.instance().layerTreeRoot())
+
+        idx = self.streamsGroupCombo.findText(prev)
+        self.streamsGroupCombo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.streamsGroupCombo.blockSignals(False)
 
     # ──────────────────────────────────────────────
     # Shared: Trail + DEM dropdowns
@@ -733,13 +761,44 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
     # ──────────────────────────────────────────────
 
     def populate_streams_list(self, *_args):
-        """Populate the multi-select hydro layer list with all line layers in the project."""
+        """Populate the hydro layer list, scoped to the selected group."""
+        from qgis.core import QgsLayerTreeGroup, QgsLayerTreeLayer
+        from qgis.PyQt.QtWidgets import QListWidgetItem
+
         self.streamsListWidget.clear()
-        for lyr in sorted(
-            QgsProject.instance().mapLayers().values(), key=lambda l: l.name()
-        ):
-            if isinstance(lyr, QgsVectorLayer) and lyr.geometryType() == QgsWkbTypes.LineGeometry:
-                from qgis.PyQt.QtWidgets import QListWidgetItem
+
+        group_path = self.streamsGroupCombo.currentData()
+
+        if group_path:
+            def _find_group(node, target_path, current_path=""):
+                for child in node.children():
+                    if isinstance(child, QgsLayerTreeGroup):
+                        cp = f"{current_path}/{child.name()}" if current_path else child.name()
+                        if cp == target_path:
+                            return child
+                        result = _find_group(child, target_path, cp)
+                        if result:
+                            return result
+                return None
+
+            group_node = _find_group(QgsProject.instance().layerTreeRoot(), group_path)
+            if group_node:
+                candidate_layers = sorted(
+                    [tl.layer() for tl in group_node.findLayers()
+                     if tl.layer() and isinstance(tl.layer(), QgsVectorLayer)],
+                    key=lambda l: l.name()
+                )
+            else:
+                candidate_layers = []
+        else:
+            candidate_layers = sorted(
+                [l for l in QgsProject.instance().mapLayers().values()
+                 if isinstance(l, QgsVectorLayer)],
+                key=lambda l: l.name()
+            )
+
+        for lyr in candidate_layers:
+            if lyr.geometryType() == QgsWkbTypes.LineGeometry:
                 item = QListWidgetItem(lyr.name())
                 item.setData(Qt.UserRole, lyr.id())
                 self.streamsListWidget.addItem(item)

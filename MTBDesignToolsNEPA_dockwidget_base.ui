@@ -351,6 +351,54 @@
          </widget>
         </item>
 
+        <!-- Group selector row -->
+        <item>
+         <layout class="QHBoxLayout" name="streamsGroupRow">
+          <property name="spacing">
+           <number>4</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="streamsGroupLabel">
+            <property name="text">
+             <string>Layer group:</string>
+            </property>
+            <property name="toolTip">
+             <string>Limit the hydro layer list to a specific QGIS layer group (e.g. "Hydro" or "Streams")</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="streamsGroupCombo">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+              <horstretch>1</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="toolTip">
+             <string>Select a layer group to filter the hydro list. Choose "(All layers)" to show every line layer.</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="refreshStreamsButton">
+            <property name="text">
+             <string>↻</string>
+            </property>
+            <property name="toolTip">
+             <string>Refresh group list and hydro layer list from project</string>
+            </property>
+            <property name="maximumWidth">
+             <number>28</number>
+            </property>
+            <property name="maximumHeight">
+             <number>24</number>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+
         <!-- Hydro layers header row -->
         <item>
          <layout class="QHBoxLayout" name="streamsHeaderRow">
@@ -386,26 +434,10 @@
              <string>All</string>
             </property>
             <property name="toolTip">
-             <string>Select all hydro layers</string>
+             <string>Select all hydro layers in the current group</string>
             </property>
             <property name="maximumWidth">
              <number>40</number>
-            </property>
-            <property name="maximumHeight">
-             <number>24</number>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QPushButton" name="refreshStreamsButton">
-            <property name="text">
-             <string>↻</string>
-            </property>
-            <property name="toolTip">
-             <string>Refresh hydro layer list from project</string>
-            </property>
-            <property name="maximumWidth">
-             <number>28</number>
             </property>
             <property name="maximumHeight">
              <number>24</number>
