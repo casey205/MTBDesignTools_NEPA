@@ -780,6 +780,9 @@
         <string>NEPA Report</string>
        </attribute>
        <layout class="QVBoxLayout" name="reportTabLayout">
+        <property name="spacing">
+         <number>5</number>
+        </property>
         <property name="leftMargin">
          <number>6</number>
         </property>
@@ -792,48 +795,214 @@
         <property name="bottomMargin">
          <number>6</number>
         </property>
+
+        <!-- Project metadata form -->
         <item>
-         <widget class="QLabel" name="reportComingSoonLabel">
+         <widget class="QGroupBox" name="reportMetaGroup">
+          <property name="title">
+           <string>Project Information</string>
+          </property>
+          <layout class="QFormLayout" name="reportMetaForm">
+           <property name="leftMargin">
+            <number>6</number>
+           </property>
+           <property name="topMargin">
+            <number>6</number>
+           </property>
+           <property name="rightMargin">
+            <number>6</number>
+           </property>
+           <property name="bottomMargin">
+            <number>6</number>
+           </property>
+           <property name="horizontalSpacing">
+            <number>8</number>
+           </property>
+           <property name="verticalSpacing">
+            <number>4</number>
+           </property>
+           <item row="0" column="0">
+            <widget class="QLabel" name="reportProjectNameLabel">
+             <property name="text">
+              <string>Project name:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QLineEdit" name="reportProjectNameEdit">
+             <property name="placeholderText">
+              <string>e.g. Deathball Mountain MTB Trail System</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="reportForestLabel">
+             <property name="text">
+              <string>Forest / Unit:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QLineEdit" name="reportForestEdit">
+             <property name="placeholderText">
+              <string>e.g. Fremont-Winema National Forest, Klamath RD</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="reportLocationLabel">
+             <property name="text">
+              <string>Location:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QLineEdit" name="reportLocationEdit">
+             <property name="placeholderText">
+              <string>e.g. T37S R7E Sec. 14, Klamath County, Oregon</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="0">
+            <widget class="QLabel" name="reportPreparerLabel">
+             <property name="text">
+              <string>Prepared by:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="1">
+            <widget class="QLineEdit" name="reportPreparerEdit">
+             <property name="placeholderText">
+              <string>e.g. Casey Varnum, Redside Surveying and Mapping, LLC</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="0">
+            <widget class="QLabel" name="reportDateLabel">
+             <property name="text">
+              <string>Date:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="1">
+            <widget class="QLineEdit" name="reportDateEdit">
+             <property name="placeholderText">
+              <string>e.g. June 2026</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+
+        <!-- Proposed action -->
+        <item>
+         <widget class="QLabel" name="reportActionLabel">
           <property name="text">
-           <string>Coming soon: Submit for NEPA Review
-
-This tool will package your trail design data into a standardized NEPA submission including:
-
-  • Trail alignment shapefiles segmented by habitat type and land management allocation
-  • Stream crossing point shapefile (with stream class attributes)
-  • Sensitive area overlap summary table
-  • Trail statistics: length by allocation, crossings by stream class, miles in Riparian Reserve
-  • IMBA difficulty classification summary
-
-Complete the Profile &amp; Difficulty and Stream Crossings analyses first, then return here to generate the report package.</string>
-          </property>
-          <property name="wordWrap">
-           <bool>true</bool>
-          </property>
-          <property name="alignment">
-           <set>Qt::AlignTop|Qt::AlignLeft</set>
-          </property>
-          <property name="styleSheet">
-           <string>color: #555; padding: 8px;</string>
+           <string>Proposed action (1-3 sentences):</string>
           </property>
          </widget>
         </item>
         <item>
-         <spacer name="reportSpacer">
-          <property name="orientation">
-           <enum>Qt::Vertical</enum>
+         <widget class="QPlainTextEdit" name="reportActionEdit">
+          <property name="maximumHeight">
+           <number>60</number>
           </property>
-          <property name="sizeType">
-           <enum>QSizePolicy::Expanding</enum>
+          <property name="minimumHeight">
+           <number>44</number>
           </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>0</width>
-            <height>0</height>
-           </size>
+          <property name="placeholderText">
+           <string>Construct approximately X miles of new non-motorized singletrack mountain bike trail on NFS lands within the Fremont-Winema National Forest. The proposed trail system avoids all Class 1 and Class 2 fish-bearing streams and known sensitive habitat areas identified in USFS corporate GIS layers.</string>
           </property>
-         </spacer>
+         </widget>
         </item>
+
+        <!-- PDFs / avoidance measures -->
+        <item>
+         <widget class="QLabel" name="reportPDFsLabel">
+          <property name="text">
+           <string>Project Design Features / Avoidance Measures (one per line):</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPlainTextEdit" name="reportPDFsEdit">
+          <property name="maximumHeight">
+           <number>72</number>
+          </property>
+          <property name="minimumHeight">
+           <number>44</number>
+          </property>
+          <property name="placeholderText">
+           <string>No trail construction within 100 ft of Class 1 or Class 2 fish-bearing streams
+All stream crossings use hardened crossing structures (rock, bridge, or culvert)
+Trail avoids all mapped NSO PACs and spotted owl activity centers
+Wetland delineation completed; trail rerouted to avoid jurisdictional wetlands
+No surface disturbance during raptor nesting season (Feb 1 – Aug 15)</string>
+          </property>
+         </widget>
+        </item>
+
+        <!-- Generate + Export buttons -->
+        <item>
+         <layout class="QHBoxLayout" name="reportButtonRow">
+          <property name="spacing">
+           <number>6</number>
+          </property>
+          <item>
+           <widget class="QPushButton" name="generateReportButton">
+            <property name="text">
+             <string>Generate Screening Memo</string>
+            </property>
+            <property name="toolTip">
+             <string>Assemble project metadata, stream crossing data, and habitat triage results into a NEPA environmental screening memo</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="exportReportButton">
+            <property name="text">
+             <string>Export as Text…</string>
+            </property>
+            <property name="toolTip">
+             <string>Save the generated memo as a plain-text file (.txt)</string>
+            </property>
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="reportButtonStretch">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Expanding</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>0</width>
+              <height>0</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+         </layout>
+        </item>
+
+        <!-- Report preview -->
+        <item>
+         <widget class="QPlainTextEdit" name="reportPreviewText">
+          <property name="readOnly">
+           <bool>true</bool>
+          </property>
+          <property name="placeholderText">
+           <string>Fill in project information above, run the Stream Crossings and Habitat Overlap analyses, then click "Generate Screening Memo".</string>
+          </property>
+         </widget>
+        </item>
+
        </layout>
       </widget>
 

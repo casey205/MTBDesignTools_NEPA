@@ -286,6 +286,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         self._setup_profile_tab()
         self._setup_crossings_tab()
         self._setup_habitat_tab()
+        self._setup_report_tab()
 
         # Refresh pickers when project layers change
         QgsProject.instance().layersAdded.connect(self._on_layers_changed)
@@ -1647,3 +1648,249 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             f"🟢 GREEN  : {green_mi:.3f} mi\n\n"
             "Attributes: Trail, SegType, Miles, Layers"
         )
+
+    # ──────────────────────────────────────────────
+    # Tab 3: NEPA Report
+    # ──────────────────────────────────────────────
+
+    def _setup_report_tab(self):
+        from qgis.PyQt.QtGui import QFont
+        import datetime
+
+        self.generateReportButton.clicked.connect(self.generate_report)
+        self.exportReportButton.clicked.connect(self.export_report)
+        self.reportPreviewText.setFont(QFont("Courier New", 9))
+
+        # Pre-fill date field with today
+        self.reportDateEdit.setText(datetime.date.today().strftime("%B %Y"))
+
+    def generate_report(self):
+        import datetime
+        from collections import defaultdict
+
+        proj_name  = self.reportProjectNameEdit.text().strip() or "[Project Name]"
+        forest     = self.reportForestEdit.text().strip()      or "[Forest / Unit]"
+        location   = self.reportLocationEdit.text().strip()    or "[Location]"
+        preparer   = self.reportPreparerEdit.text().strip()    or "[Preparer]"
+        date_str   = self.reportDateEdit.text().strip()        or datetime.date.today().strftime("%B %Y")
+        action     = self.reportActionEdit.toPlainText().strip()
+        pdfs_raw   = self.reportPDFsEdit.toPlainText().strip()
+
+        pdfs = [line.strip() for line in pdfs_raw.splitlines() if line.strip()]
+
+        W = 70  # page width for text formatting
+
+        def bar(char="═"):
+            return char * W
+
+        def section(title):
+            return f"\n{bar()}\n{title}\n{bar()}\n"
+
+        lines = [
+            bar("═"),
+            "ENVIRONMENTAL SCREENING MEMO".center(W),
+            "National Environmental Policy Act — Project Design Review".center(W),
+            bar("═"),
+            "",
+            f"  Project  : {proj_name}",
+            f"  Forest   : {forest}",
+            f"  Location : {location}",
+            f"  Prepared : {preparer}",
+            f"  Date     : {date_str}",
+            "",
+        ]
+
+        # ── Proposed Action ──
+        lines.append(section("1. PROPOSED ACTION"))
+        if action:
+            for para in action.splitlines():
+                lines.append(f"  {para}")
+        else:
+            lines.append("  [No proposed action description entered.]")
+
+        # ── Project Design Features ──
+        lines.append(section("2. PROJECT DESIGN FEATURES / AVOIDANCE MEASURES"))
+        if pdfs:
+            for i, pdf in enumerate(pdfs, 1):
+                lines.append(f"  {i:>2}. {pdf}")
+        else:
+            lines.append("  [No project design features entered.]")
+
+        # ── Stream Crossings ──
+        lines.append(section("3. STREAM CROSSING ANALYSIS"))
+        if not self._crossings_data:
+            lines.append("  Stream crossing analysis not yet run.")
+            lines.append("  Run the Stream Crossings tab first.")
+        else:
+            total = len(self._crossings_data)
+            fb_count = sum(1 for c in self._crossings_data if c.get("fish_bearing") == "Yes")
+            nfb_count = total - fb_count
+
+            # Count by stream class
+            by_class = defaultdict(int)
+            by_class_fb = defaultdict(int)
+            for c in self._crossings_data:
+                cls = c.get("stream_class", "Unknown")
+                by_class[cls] += 1
+                if c.get("fish_bearing") == "Yes":
+                    by_class_fb[cls] += 1
+
+            lines += [
+                f"  Total stream crossings    : {total}",
+                f"  Fish-bearing crossings    : {fb_count}",
+                f"  Non-fish-bearing crossings: {nfb_count}",
+                "",
+                f"  {'Stream Class':<18} {'Crossings':>10}  {'Fish-Bearing':>13}",
+                f"  {'─'*46}",
+            ]
+            for cls in sorted(by_class):
+                lines.append(
+                    f"  {cls:<18} {by_class[cls]:>10}  {by_class_fb[cls]:>13}"
+                )
+
+            # Per-trail breakdown
+            by_trail = defaultdict(list)
+            for c in self._crossings_data:
+                by_trail[c["trail"]].append(c)
+
+            lines += ["", f"  {'Trail':<30} {'Crossings':>9}  {'Fish-Bearing':>13}"]
+            lines.append(f"  {'─'*56}")
+            for trail_name in sorted(by_trail):
+                crossings = by_trail[trail_name]
+                fb = sum(1 for c in crossings if c.get("fish_bearing") == "Yes")
+                lines.append(f"  {trail_name[:30]:<30} {len(crossings):>9}  {fb:>13}")
+
+            lines += [
+                "",
+                "  FINDING: All Class 1 and Class 2 fish-bearing stream crossings"
+                if fb_count == 0 else
+                f"  NOTE: {fb_count} fish-bearing crossing(s) identified — hardened",
+                "  crossing structures required per Project Design Features."
+                if fb_count > 0 else
+                "  have been avoided. No fish-bearing stream crossings proposed.",
+            ]
+
+        # ── Habitat / Trail Triage ──
+        lines.append(section("4. SENSITIVE AREA OVERLAP — TRAIL TRIAGE"))
+        if not self._habitat_data:
+            lines.append("  Habitat overlap analysis not yet run.")
+            lines.append("  Run the Habitat Overlap tab first.")
+        else:
+            total_mi    = sum(r["miles"]        for r in self._habitat_data)
+            red_mi      = sum(r["red_miles"]    for r in self._habitat_data)
+            yellow_mi   = sum(r["yellow_miles"] for r in self._habitat_data)
+            green_mi    = sum(r["green_miles"]  for r in self._habitat_data)
+            pct_clear   = (green_mi / total_mi * 100) if total_mi > 0 else 0
+
+            lines += [
+                f"  Total project mileage     : {total_mi:.3f} mi",
+                f"  Miles - direct conflict   : {red_mi:.3f} mi  ({red_mi/total_mi*100:.1f}%)"
+                if total_mi > 0 else f"  Miles - direct conflict   : {red_mi:.3f} mi",
+                f"  Miles - within buffer zone: {yellow_mi:.3f} mi  ({yellow_mi/total_mi*100:.1f}%)"
+                if total_mi > 0 else f"  Miles - within buffer zone: {yellow_mi:.3f} mi",
+                f"  Miles - clear of all areas: {green_mi:.3f} mi  ({pct_clear:.1f}%)",
+                "",
+                f"  {'Trail':<30} {'Total':>6}  {'RED mi':>7}  {'YLW mi':>7}  {'GRN mi':>7}",
+                f"  {'─'*62}",
+            ]
+            for r in self._habitat_data:
+                icon = {"RED": "[R]", "YELLOW": "[Y]", "GREEN": "[G]"}[r["triage"]]
+                lines.append(
+                    f"  {icon} {r['trail'][:28]:<28} {r['miles']:>6.2f}  "
+                    f"{r['red_miles']:>7.3f}  {r['yellow_miles']:>7.3f}  "
+                    f"{r['green_miles']:>7.3f}"
+                )
+
+            # Conflict layer summary
+            all_conflict_layers = set()
+            for r in self._habitat_data:
+                all_conflict_layers.update(r.get("layer_detail", {}).keys())
+
+            if all_conflict_layers:
+                lines += ["", "  Sensitive layers with direct or adjacent conflicts:"]
+                for lyr_name in sorted(all_conflict_layers):
+                    lines.append(f"    • {lyr_name}")
+
+        # ── NEPA Recommendation ──
+        lines.append(section("5. NEPA RECOMMENDATION"))
+        if self._habitat_data and self._crossings_data is not None:
+            red_trails   = [r for r in self._habitat_data if r["triage"] == "RED"]
+            green_trails = [r for r in self._habitat_data if r["triage"] == "GREEN"]
+            total_mi     = sum(r["miles"] for r in self._habitat_data)
+            green_mi_sum = sum(r["green_miles"] for r in self._habitat_data)
+            red_mi_sum   = sum(r["red_miles"]   for r in self._habitat_data)
+
+            if red_mi_sum < 0.1 and len(red_trails) == 0:
+                lines += [
+                    "  CATEGORICAL EXCLUSION (CE) — All trail segments are clear of direct",
+                    "  sensitive area conflicts. Based on this GIS screening, the proposed",
+                    f"  project ({total_mi:.2f} mi) meets the criteria for a Categorical",
+                    "  Exclusion under 36 CFR 220.6, subject to specialist concurrence.",
+                ]
+            elif red_mi_sum < 0.5:
+                lines += [
+                    "  TIERED APPROACH RECOMMENDED — The majority of project miles are clear",
+                    f"  of sensitive area conflicts ({green_mi_sum:.2f} mi GREEN). A limited",
+                    f"  Environmental Assessment (EA) focused on {red_mi_sum:.3f} mi of direct",
+                    "  conflict segments may be sufficient, with CE treatment applied to",
+                    "  the remainder of the alignment.",
+                    "",
+                    "  Recommended next steps:",
+                    "  1. Field verification of RED-flagged segments",
+                    "  2. Targeted specialist surveys (Wildlife, Botany, Hydrology)",
+                    "  3. Evaluate reroute options to eliminate remaining RED miles",
+                ]
+            else:
+                lines += [
+                    "  ENVIRONMENTAL ASSESSMENT (EA) — Direct sensitive area conflicts",
+                    f"  ({red_mi_sum:.3f} mi) require EA-level NEPA analysis. Specialist",
+                    "  surveys and formal consultation (ESA Section 7) likely required",
+                    "  prior to project approval.",
+                    "",
+                    "  Recommended next steps:",
+                    "  1. Field-verify all RED-flagged segments",
+                    "  2. Full specialist survey program per RFP",
+                    "  3. Evaluate reroutes to reduce direct conflict mileage",
+                ]
+        else:
+            lines += [
+                "  Run Stream Crossings and Habitat Overlap analyses to generate",
+                "  an automated NEPA pathway recommendation.",
+            ]
+
+        lines += [
+            "",
+            bar("─"),
+            "  This memo was generated by MTBDesignTools NEPA (GIS screening tool).",
+            "  It is a preliminary desktop analysis only and does not substitute",
+            "  for field surveys, specialist reports, or formal NEPA documentation.",
+            bar("─"),
+            "",
+            f"  Prepared: {preparer}  |  {date_str}",
+        ]
+
+        memo_text = "\n".join(lines)
+        self.reportPreviewText.setPlainText(memo_text)
+        self._report_text = memo_text
+        self.exportReportButton.setEnabled(True)
+
+    def export_report(self):
+        if not getattr(self, "_report_text", None):
+            QMessageBox.information(self, "Export", "Generate the report first.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Screening Memo", "", "Text file (*.txt)"
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(self._report_text)
+            QMessageBox.information(
+                self, "Export Complete",
+                f"Memo saved to:\n{path}"
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
