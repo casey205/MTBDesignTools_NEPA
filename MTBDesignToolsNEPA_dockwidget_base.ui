@@ -534,6 +534,54 @@
          </widget>
         </item>
 
+        <!-- Group selector row -->
+        <item>
+         <layout class="QHBoxLayout" name="habitatGroupRow">
+          <property name="spacing">
+           <number>4</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="habitatGroupLabel">
+            <property name="text">
+             <string>Layer group:</string>
+            </property>
+            <property name="toolTip">
+             <string>Limit the layer list to a specific QGIS layer group (e.g. "Habitat Avoidance")</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="habitatGroupCombo">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+              <horstretch>1</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="toolTip">
+             <string>Select a layer group to filter the sensitive-layers list. Choose "(All layers)" to show everything.</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="refreshHabitatButton">
+            <property name="text">
+             <string>↻</string>
+            </property>
+            <property name="toolTip">
+             <string>Refresh group list and layer list from project</string>
+            </property>
+            <property name="maximumWidth">
+             <number>28</number>
+            </property>
+            <property name="maximumHeight">
+             <number>24</number>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+
         <!-- Sensitive layers header -->
         <item>
          <layout class="QHBoxLayout" name="habitatLayersHeaderRow">
@@ -573,22 +621,6 @@
             </property>
             <property name="maximumWidth">
              <number>40</number>
-            </property>
-            <property name="maximumHeight">
-             <number>24</number>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QPushButton" name="refreshHabitatButton">
-            <property name="text">
-             <string>↻</string>
-            </property>
-            <property name="toolTip">
-             <string>Refresh layer list from project</string>
-            </property>
-            <property name="maximumWidth">
-             <number>28</number>
             </property>
             <property name="maximumHeight">
              <number>24</number>

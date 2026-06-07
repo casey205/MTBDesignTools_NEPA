@@ -1097,26 +1097,86 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
     # ──────────────────────────────────────────────
 
     def _setup_habitat_tab(self):
-        self.refreshHabitatButton.clicked.connect(self.populate_habitat_list)
+        self.refreshHabitatButton.clicked.connect(self._refresh_habitat_tab)
+        self.habitatGroupCombo.currentIndexChanged.connect(self.populate_habitat_list)
         self.selectAllHabitatButton.clicked.connect(self._select_all_habitat)
         self.runHabitatButton.clicked.connect(self.run_habitat_analysis)
         self.exportHabitatButton.clicked.connect(self.export_habitat_triage)
-        self.populate_habitat_list()
+        self._refresh_habitat_tab()
 
         from qgis.PyQt.QtGui import QFont
         self.habitatResultsText.setFont(QFont("Courier New", 9))
 
+    def _refresh_habitat_tab(self, *_args):
+        """Repopulate group combo then layer list."""
+        self._populate_habitat_groups()
+        self.populate_habitat_list()
+
+    def _populate_habitat_groups(self):
+        """Fill habitatGroupCombo with all QGIS layer-tree group names."""
+        from qgis.core import QgsLayerTreeGroup
+
+        prev = self.habitatGroupCombo.currentText()
+        self.habitatGroupCombo.blockSignals(True)
+        self.habitatGroupCombo.clear()
+        self.habitatGroupCombo.addItem("(All layers)", None)
+
+        def _walk(node, prefix=""):
+            for child in node.children():
+                if isinstance(child, QgsLayerTreeGroup):
+                    full_name = f"{prefix}/{child.name()}" if prefix else child.name()
+                    self.habitatGroupCombo.addItem(full_name, full_name)
+                    _walk(child, full_name)
+
+        _walk(QgsProject.instance().layerTreeRoot())
+
+        # Restore previous selection if still available
+        idx = self.habitatGroupCombo.findText(prev)
+        self.habitatGroupCombo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.habitatGroupCombo.blockSignals(False)
+
     def populate_habitat_list(self, *_args):
-        """Populate the sensitive layers list with all polygon and line vector layers."""
+        """Populate the sensitive layers list, scoped to the selected group."""
+        from qgis.core import QgsLayerTreeGroup, QgsLayerTreeLayer
+        from qgis.PyQt.QtWidgets import QListWidgetItem
+
         self.habitatListWidget.clear()
-        for lyr in sorted(
-            QgsProject.instance().mapLayers().values(), key=lambda l: l.name()
-        ):
-            if not isinstance(lyr, QgsVectorLayer):
-                continue
-            geom_type = lyr.geometryType()
-            if geom_type in (QgsWkbTypes.PolygonGeometry, QgsWkbTypes.LineGeometry):
-                from qgis.PyQt.QtWidgets import QListWidgetItem
+
+        group_path = self.habitatGroupCombo.currentData()
+
+        if group_path:
+            # Walk the layer tree to find the named group, then collect its layers
+            def _find_group(node, target_path, current_path=""):
+                for child in node.children():
+                    if isinstance(child, QgsLayerTreeGroup):
+                        cp = f"{current_path}/{child.name()}" if current_path else child.name()
+                        if cp == target_path:
+                            return child
+                        result = _find_group(child, target_path, cp)
+                        if result:
+                            return result
+                return None
+
+            group_node = _find_group(QgsProject.instance().layerTreeRoot(), group_path)
+            if group_node:
+                candidate_layers = []
+                for tree_lyr in group_node.findLayers():
+                    lyr = tree_lyr.layer()
+                    if lyr and isinstance(lyr, QgsVectorLayer):
+                        candidate_layers.append(lyr)
+                candidate_layers.sort(key=lambda l: l.name())
+            else:
+                candidate_layers = []
+        else:
+            # All layers
+            candidate_layers = sorted(
+                [l for l in QgsProject.instance().mapLayers().values()
+                 if isinstance(l, QgsVectorLayer)],
+                key=lambda l: l.name()
+            )
+
+        for lyr in candidate_layers:
+            if lyr.geometryType() in (QgsWkbTypes.PolygonGeometry, QgsWkbTypes.LineGeometry):
                 item = QListWidgetItem(lyr.name())
                 item.setData(Qt.UserRole, lyr.id())
                 self.habitatListWidget.addItem(item)
