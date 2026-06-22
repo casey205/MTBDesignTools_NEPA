@@ -1660,6 +1660,37 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             "",
         ]
 
+        # ── By sensitive layer summary ─────────────────────────────────
+        from collections import defaultdict
+        layer_summary = defaultdict(lambda: {"trails": set(), "red_mi": 0.0, "yellow_mi": 0.0})
+        for r in results:
+            for lyr_name, d in r.get("layer_detail", {}).items():
+                layer_summary[lyr_name]["red_mi"]    += d.get("red_mi",    0.0)
+                layer_summary[lyr_name]["yellow_mi"] += d.get("yellow_mi", 0.0)
+                if d.get("red_mi", 0.0) > 0.001 or d.get("yellow_mi", 0.0) > 0.001:
+                    layer_summary[lyr_name]["trails"].add(r["trail"])
+
+        # Include layers with zero conflict so every analyzed layer is visible
+        for lyr in sensitive_layers:
+            if lyr.name() not in layer_summary:
+                layer_summary[lyr.name()] = {"trails": set(), "red_mi": 0.0, "yellow_mi": 0.0}
+
+        lines += ["─" * 66, "BY SENSITIVE LAYER", "─" * 66]
+        lyr_col = min(42, max(12, max(len(n) for n in layer_summary) + 1))
+        lines.append(
+            f"  {'Layer':<{lyr_col}} {'Trails':>6}  {'RED mi':>8}  {'YLW mi':>8}"
+        )
+        lines.append("  " + "─" * (lyr_col + 28))
+        for lyr_name in [l.name() for l in sensitive_layers]:
+            d = layer_summary[lyr_name]
+            n_trails = len(d["trails"])
+            flag = "🔴" if d["red_mi"] > 0.001 else ("🟡" if d["yellow_mi"] > 0.001 else "🟢")
+            lines.append(
+                f"  {flag} {lyr_name[:lyr_col - 1]:<{lyr_col - 1}} {n_trails:>6}  "
+                f"{d['red_mi']:>8.3f}  {d['yellow_mi']:>8.3f}"
+            )
+        lines.append("")
+
         # Per-trail detail table
         lines += ["─" * 66, "PER-TRAIL BREAKDOWN", "─" * 66]
         col = min(28, max(12, max(len(r["trail"]) for r in results) + 1))
