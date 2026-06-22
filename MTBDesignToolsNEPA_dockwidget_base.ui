@@ -856,6 +856,19 @@
            </widget>
           </item>
           <item>
+           <widget class="QPushButton" name="exportLAAButton">
+            <property name="text">
+             <string>Export LAA Shapefile…</string>
+            </property>
+            <property name="toolTip">
+             <string>Generate segmented trail shapefile for LAA pre-reporting — assigns each trail segment to NSO Habitat, Critical Habitat, RA32, and LRMP Allocation categories</string>
+            </property>
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
            <spacer name="habitatActionStretch">
             <property name="orientation">
              <enum>Qt::Horizontal</enum>
@@ -1057,6 +1070,105 @@ Trail avoids all mapped NSO PACs and spotted owl activity centers
 Wetland delineation completed; trail rerouted to avoid jurisdictional wetlands
 No surface disturbance during raptor nesting season (Feb 1 – Aug 15)</string>
           </property>
+         </widget>
+        </item>
+
+        <!-- Methodology / Data Sources -->
+        <item>
+         <widget class="QLabel" name="reportMethodologyLabel">
+          <property name="text">
+           <string>Desktop screening methodology / data sources:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPlainTextEdit" name="reportMethodologyEdit">
+          <property name="maximumHeight">
+           <number>80</number>
+          </property>
+          <property name="minimumHeight">
+           <number>52</number>
+          </property>
+          <property name="placeholderText">
+           <string>Stream layers: FS-provided preliminary LiDAR streams (received [date]). Trail alignment: Trail_Design layer as of [date]. Road segments excluded from crossing count (existing authorized infrastructure). Preliminary crossing estimate per RFP scope: ~143. Desktop screening result: [N] crossings on proposed new trail construction. Layer version should be confirmed with MRRD Hydrologist prior to field survey design.</string>
+          </property>
+         </widget>
+        </item>
+
+        <!-- Data Gaps -->
+        <item>
+         <widget class="QLabel" name="reportDataGapsLabel">
+          <property name="text">
+           <string>Data gaps / outstanding questions (one per line):</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPlainTextEdit" name="reportDataGapsEdit">
+          <property name="maximumHeight">
+           <number>72</number>
+          </property>
+          <property name="minimumHeight">
+           <number>44</number>
+          </property>
+          <property name="placeholderText">
+           <string>Updated stream layer version unconfirmed — confirm with MRRD Hydrologist before field survey design
+Wetland delineation not yet completed — four priority investigation areas identified
+Class 3 fish distribution boundaries unverified — field surveys required
+NSO ARU survey results pending — nest patch overlap TBD</string>
+          </property>
+         </widget>
+        </item>
+
+        <!-- Analysis Status Panel -->
+        <item>
+         <widget class="QGroupBox" name="reportStatusGroup">
+          <property name="title">
+           <string>Analysis Status</string>
+          </property>
+          <layout class="QVBoxLayout" name="reportStatusLayout">
+           <property name="spacing">
+            <number>3</number>
+           </property>
+           <property name="leftMargin">
+            <number>6</number>
+           </property>
+           <property name="topMargin">
+            <number>4</number>
+           </property>
+           <property name="rightMargin">
+            <number>6</number>
+           </property>
+           <property name="bottomMargin">
+            <number>4</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="reportCrossingsStatus">
+             <property name="text">
+              <string>✗  Stream Crossings — not yet run</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+             <property name="styleSheet">
+              <string>color: #888;</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="reportHabitatStatus">
+             <property name="text">
+              <string>✗  Habitat Triage — not yet run</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+             <property name="styleSheet">
+              <string>color: #888;</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
          </widget>
         </item>
 

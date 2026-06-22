@@ -283,6 +283,9 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         self._crossings_data = []
         self._habitat_data = []
         self._crossings_exported = False  # tracks whether annotations have been exported
+        self._crossings_snapshot = None   # (timestamp_str, [layer_name, ...])
+        self._habitat_snapshot = None     # (timestamp_str, [layer_name, ...])
+        self._laa_layer_types = {}        # {layer_name: LAA type string}
 
         self._setup_profile_tab()
         self._setup_crossings_tab()
@@ -295,6 +298,11 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         # Refresh pickers when project layers change
         QgsProject.instance().layersAdded.connect(self._on_layers_changed)
         QgsProject.instance().layersRemoved.connect(self._on_layers_changed)
+
+        # Restore saved state when a project is opened, and load immediately
+        # for projects that are already open when the plugin loads
+        QgsProject.instance().readProject.connect(self._load_from_project)
+        self._load_from_project()
 
     # ──────────────────────────────────────────────
     # Setup helpers
@@ -949,11 +957,36 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
 
         self._crossings_data = all_crossings
         self._crossings_exported = False  # new data — annotations not yet exported
+        import datetime as _dt
+        self._crossings_snapshot = (
+            _dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            [lyr.name() for lyr in stream_layers],
+        )
+        self._save_to_project()
+        self._update_report_status()
         self._add_crossings_to_map(all_crossings, trail_lyr)
         self._display_crossings_results(all_crossings, trail_lyr, stream_layers, crs_notes)
         self.exportCrossingsButton.setEnabled(bool(all_crossings))
 
     # Crossing type options for fish-bearing (Class 1 & 2) crossings
+    LAA_TYPES = [
+        "NSO Habitat",
+        "Critical Habitat",
+        "RA32 Habitat",
+        "LRMP Allocation",
+        "General Sensitive Area",
+        "(Skip — exclude from LAA export)",
+    ]
+
+    # Shapefile field name for each LAA type (max 10 chars)
+    LAA_FIELD_MAP = {
+        "NSO Habitat":          "NSO_Hab",
+        "Critical Habitat":     "Crit_Hab",
+        "RA32 Habitat":         "RA32_Hab",
+        "LRMP Allocation":      "LRMP_Alloc",
+        "General Sensitive Area": "Sensitive",
+    }
+
     CROSSING_TYPES = [
         "Proposed new crossing",
         "Existing road bridge (no new work)",
@@ -1250,6 +1283,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         self.selectAllHabitatButton.clicked.connect(self._select_all_habitat)
         self.runHabitatButton.clicked.connect(self.run_habitat_analysis)
         self.exportHabitatButton.clicked.connect(self.export_habitat_triage)
+        self.exportLAAButton.clicked.connect(self.export_laa_shapefile)
         self._refresh_habitat_tab()
 
         from qgis.PyQt.QtGui import QFont
@@ -1570,9 +1604,17 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         results.sort(key=lambda r: (_order[r["triage"]], r["trail"]))
 
         self._habitat_data = results
+        import datetime as _dt
+        self._habitat_snapshot = (
+            _dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            [lyr.name() for lyr in sensitive_layers],
+        )
+        self._save_to_project()
+        self._update_report_status()
         self._add_habitat_layer_to_map(results, trail_lyr)
         self._display_habitat_results(results, sensitive_layers, buffer_ft)
         self.exportHabitatButton.setEnabled(bool(results))
+        self.exportLAAButton.setEnabled(bool(results))
 
     def _display_habitat_results(self, results, sensitive_layers, buffer_ft):
         from collections import defaultdict
@@ -1721,6 +1763,338 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         QgsProject.instance().addMapLayer(mem_layer)
         self.iface.mapCanvas().refresh()
 
+    # ── LAA Pre-Report Shapefile Export ────────────────────────────────
+
+    def export_laa_shapefile(self):
+        """Entry point: assign layer types, then run the LAA segmentation export."""
+        if not self._habitat_snapshot:
+            QMessageBox.warning(self, "LAA Export",
+                "Run the Habitat Overlap analysis first.")
+            return
+
+        _, snap_layer_names = self._habitat_snapshot
+
+        # Resolve snapshot layer names to live QgsVectorLayer objects
+        sensitive_layers = []
+        missing = []
+        for lyr_name in snap_layer_names:
+            lyrs = QgsProject.instance().mapLayersByName(lyr_name)
+            if lyrs:
+                sensitive_layers.append(lyrs[0])
+            else:
+                missing.append(lyr_name)
+
+        if missing:
+            resp = QMessageBox.question(
+                self, "LAA Export — Missing Layers",
+                "Some layers from the last analysis are no longer loaded:\n"
+                f"  {', '.join(missing)}\n\n"
+                "Proceed with the remaining layers?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if resp == QMessageBox.No:
+                return
+
+        if not sensitive_layers:
+            QMessageBox.warning(self, "LAA Export",
+                "No layers from the last analysis are currently loaded.\n"
+                "Reload the layers and re-run Habitat Overlap.")
+            return
+
+        # Show type-assignment dialog
+        layer_types = self._show_laa_type_dialog(sensitive_layers)
+        if layer_types is None:
+            return  # user cancelled
+
+        # Persist the assignments
+        self._laa_layer_types = layer_types
+        self._save_to_project()
+
+        # Ask where to save
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export LAA Pre-Report Shapefile", "", "Shapefile (*.shp)"
+        )
+        if not path:
+            return
+
+        self._run_laa_export(sensitive_layers, layer_types, path)
+
+    def _show_laa_type_dialog(self, sensitive_layers):
+        """
+        Show a dialog for the user to assign an LAA type to each layer.
+        Returns {layer_name: type_str} or None if cancelled.
+        """
+        from qgis.PyQt.QtWidgets import (
+            QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+            QTableWidget, QTableWidgetItem, QComboBox, QAbstractItemView,
+            QHeaderView, QSizePolicy,
+        )
+        from qgis.PyQt.QtCore import Qt
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("LAA Pre-Report — Assign Layer Types")
+        dlg.setMinimumWidth(540)
+
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel(
+            "Assign an LAA category to each sensitive layer used in the last analysis.\n"
+            "Layers marked 'Skip' will not appear in the output shapefile.\n\n"
+            "Required for LAA pre-reporting (RFP Task 2.1):\n"
+            "  NSO Habitat · Critical Habitat · RA32 Habitat · LRMP Allocation"
+        ))
+
+        tbl = QTableWidget(len(sensitive_layers), 2, dlg)
+        tbl.setHorizontalHeaderLabels(["Layer", "LAA Type"])
+        tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
+        tbl.horizontalHeader().resizeSection(1, 220)
+        tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl.verticalHeader().setVisible(False)
+        tbl.setAlternatingRowColors(True)
+
+        for row, lyr in enumerate(sensitive_layers):
+            tbl.setItem(row, 0, QTableWidgetItem(lyr.name()))
+            combo = QComboBox()
+            combo.addItems(self.LAA_TYPES)
+            saved = self._laa_layer_types.get(lyr.name(), "General Sensitive Area")
+            if saved in self.LAA_TYPES:
+                combo.setCurrentText(saved)
+            tbl.setCellWidget(row, 1, combo)
+
+        layout.addWidget(tbl)
+
+        info = QLabel(
+            "Output: one shapefile row per homogeneous trail segment.\n"
+            "Each segment labeled Yes/No for each LAA category it falls within."
+        )
+        info.setStyleSheet("color: #555; font-style: italic;")
+        layout.addWidget(info)
+
+        btn_row = QHBoxLayout()
+        btn_export = QPushButton("Export LAA Shapefile")
+        btn_cancel = QPushButton("Cancel")
+        btn_row.addWidget(btn_export)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_cancel)
+        layout.addLayout(btn_row)
+
+        btn_export.clicked.connect(dlg.accept)
+        btn_cancel.clicked.connect(dlg.reject)
+
+        from qgis.PyQt.QtWidgets import QDialog as _QD
+        if dlg.exec_() != _QD.Accepted:
+            return None
+
+        result = {}
+        for row, lyr in enumerate(sensitive_layers):
+            combo = tbl.cellWidget(row, 1)
+            result[lyr.name()] = combo.currentText() if combo else "General Sensitive Area"
+        return result
+
+    def _run_laa_export(self, sensitive_layers, layer_types, path):
+        """
+        Segment each trail at polygon boundaries from all active typed layers,
+        label each segment by LAA category, and write the output shapefile.
+        """
+        trail_lyr = trail_layer() or self.iface.activeLayer()
+        if not trail_lyr:
+            QMessageBox.warning(self, "LAA Export", "No trail layer found.")
+            return
+
+        trail_features = (
+            list(trail_lyr.selectedFeatures())
+            if trail_lyr.selectedFeatureCount() > 0
+            else list(trail_lyr.getFeatures())
+        )
+        if not trail_features:
+            QMessageBox.warning(self, "LAA Export", "No trail features found.")
+            return
+
+        trail_fields = [f.name() for f in trail_lyr.fields()]
+        trail_name_field = next(
+            (f for f in ["Name", "name", "TRAIL_NAME", "TrailName", "trail_name"]
+             if f in trail_fields), None
+        )
+        miles_mult = distance_multiplier(trail_lyr, "Miles")
+
+        # Filter to layers not marked Skip; build spatial index per layer
+        active_layer_data = {}  # {lyr_name: {type, geoms, index}}
+        for lyr in sensitive_layers:
+            lyr_type = layer_types.get(lyr.name(), "General Sensitive Area")
+            if lyr_type == "(Skip — exclude from LAA export)":
+                continue
+
+            needs_xform = trail_lyr.crs() != lyr.crs()
+            xform = QgsCoordinateTransform(
+                lyr.crs(), trail_lyr.crs(), QgsProject.instance()
+            ) if needs_xform else None
+
+            geoms = []
+            for feat in lyr.getFeatures():
+                g = feat.geometry()
+                if not g or g.isEmpty():
+                    continue
+                if xform:
+                    g = QgsGeometry(g)
+                    g.transform(xform)
+                geoms.append(g)
+
+            idx = QgsSpatialIndex()
+            for i, g in enumerate(geoms):
+                tmp = QgsFeature(i)
+                tmp.setGeometry(g)
+                idx.addFeature(tmp)
+
+            active_layer_data[lyr.name()] = {
+                "type":  lyr_type,
+                "geoms": geoms,
+                "index": idx,
+            }
+
+        if not active_layer_data:
+            QMessageBox.warning(self, "LAA Export",
+                "All layers were marked Skip. Assign at least one LAA type and try again.")
+            return
+
+        # Determine which LAA types are actually used (for field creation)
+        used_types = sorted({d["type"] for d in active_layer_data.values()})
+
+        # Build output schema
+        fields = QgsFields()
+        fields.append(QgsField("Trail",    QVariant.String, len=60))
+        fields.append(QgsField("Seg_Mi",   QVariant.Double))
+        for laa_type in used_types:
+            fname = self.LAA_FIELD_MAP.get(laa_type, laa_type[:10])
+            fields.append(QgsField(fname, QVariant.String, len=5))
+        fields.append(QgsField("In_Layers", QVariant.String, len=250))
+
+        crs = trail_lyr.crs()
+        writer = QgsVectorFileWriter(
+            path, "UTF-8", fields, QgsWkbTypes.MultiLineString, crs, "ESRI Shapefile"
+        )
+        if writer.hasError() != QgsVectorFileWriter.NoError:
+            QMessageBox.critical(self, "LAA Export",
+                f"Could not create shapefile:\n{writer.errorMessage()}")
+            return
+
+        total_segments = 0
+        for trail_feat in trail_features:
+            trail_geom = trail_feat.geometry()
+            if not trail_geom or trail_geom.isEmpty():
+                continue
+            t_name = (
+                str(trail_feat.attribute(trail_name_field))
+                if trail_name_field else f"Trail {trail_feat.id()}"
+            )
+
+            segments = self._segment_trail_for_laa(trail_geom, active_layer_data)
+
+            for seg_geom, type_in, in_layers in segments:
+                seg_mi = seg_geom.length() * miles_mult
+                if seg_mi < 0.00005:
+                    continue
+
+                feat = QgsFeature()
+                feat.setGeometry(seg_geom)
+                feat.setFields(fields)
+                feat.setAttribute("Trail",    t_name[:60])
+                feat.setAttribute("Seg_Mi",   round(seg_mi, 5))
+                for laa_type in used_types:
+                    fname = self.LAA_FIELD_MAP.get(laa_type, laa_type[:10])
+                    feat.setAttribute(fname, "Yes" if type_in.get(laa_type) else "No")
+                feat.setAttribute("In_Layers", ", ".join(in_layers)[:250])
+                writer.addFeature(feat)
+                total_segments += 1
+
+        del writer
+
+        # Add to map canvas
+        laa_layer = QgsVectorLayer(path, "LAA Pre-Report — Trail Segments", "ogr")
+        if laa_layer.isValid():
+            QgsProject.instance().addMapLayer(laa_layer)
+
+        QMessageBox.information(
+            self, "LAA Export Complete",
+            f"Exported {total_segments} trail segments to:\n{path}\n\n"
+            f"LAA fields: {', '.join(self.LAA_FIELD_MAP.get(t, t) for t in used_types)}\n\n"
+            "Layer added to map canvas. Style by LAA field in QGIS to review."
+        )
+
+    def _segment_trail_for_laa(self, trail_geom, active_layer_data, densify_dist=5.0):
+        """
+        Densify the trail and classify each edge-midpoint against all typed layers.
+        Group consecutive edges with identical classification into polyline segments.
+
+        Returns list of (seg_geom, type_in_dict, in_layers_list) tuples where:
+          seg_geom     — QgsGeometry (LineString)
+          type_in_dict — {laa_type_str: bool}
+          in_layers_list — [layer_names that contain this segment]
+        """
+        dense = trail_geom.densifyByDistance(densify_dist)
+        vertices = list(dense.vertices())  # QgsPoint objects
+
+        if len(vertices) < 2:
+            return []
+
+        laa_types = list({d["type"] for d in active_layer_data.values()})
+
+        # Classify each edge by testing its midpoint
+        edge_data = []  # [(type_in_dict, [in_layer_names])]
+        for i in range(len(vertices) - 1):
+            v1, v2 = vertices[i], vertices[i + 1]
+            mid_x = (v1.x() + v2.x()) / 2.0
+            mid_y = (v1.y() + v2.y()) / 2.0
+            mid_pt = QgsGeometry.fromPointXY(QgsPointXY(mid_x, mid_y))
+
+            # Expand bbox slightly for spatial index query
+            mid_rect = mid_pt.boundingBox()
+            mid_rect.grow(densify_dist * 0.05 + 0.001)
+
+            type_in = {t: False for t in laa_types}
+            in_layers = []
+
+            for lyr_name, data in active_layer_data.items():
+                lyr_type = data["type"]
+                idx = data["index"]
+                geoms = data["geoms"]
+                for fid in idx.intersects(mid_rect):
+                    if geoms[fid].contains(mid_pt):
+                        type_in[lyr_type] = True
+                        if lyr_name not in in_layers:
+                            in_layers.append(lyr_name)
+                        break
+
+            edge_data.append((type_in, in_layers))
+
+        # Group consecutive edges with identical type_in classification
+        segments = []
+        group_start = 0
+        group_type_in = edge_data[0][0]
+        group_layers = list(edge_data[0][1])
+
+        def _flush_group(start, end, g_type_in, g_layers):
+            seg_pts = [QgsPointXY(v.x(), v.y()) for v in vertices[start: end + 1]]
+            if len(seg_pts) >= 2:
+                seg_geom = QgsGeometry.fromPolylineXY(seg_pts)
+                segments.append((seg_geom, dict(g_type_in), list(g_layers)))
+
+        for i in range(1, len(edge_data)):
+            curr_type_in, curr_layers = edge_data[i]
+            if curr_type_in != group_type_in:
+                _flush_group(group_start, i, group_type_in, group_layers)
+                group_start = i
+                group_type_in = curr_type_in
+                group_layers = list(curr_layers)
+            else:
+                for ln in curr_layers:
+                    if ln not in group_layers:
+                        group_layers.append(ln)
+
+        # Flush last group
+        _flush_group(group_start, len(vertices) - 1, group_type_in, group_layers)
+
+        return segments
+
     def export_habitat_triage(self):
         if not self._habitat_data:
             QMessageBox.information(self, "Export", "Run the triage analysis first.")
@@ -1810,6 +2184,36 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
 
         # Pre-fill date field with today
         self.reportDateEdit.setText(datetime.date.today().strftime("%B %Y"))
+        self._update_report_status()
+
+    def _update_report_status(self):
+        """Refresh the Analysis Status panel in the Report tab."""
+        if self._crossings_snapshot:
+            ts, layers = self._crossings_snapshot
+            n = len(self._crossings_data)
+            layer_str = ", ".join(layers) if layers else "—"
+            self.reportCrossingsStatus.setText(
+                f"✓  Stream Crossings  |  {ts}  |  {n} crossings  |  {layer_str}"
+            )
+            self.reportCrossingsStatus.setStyleSheet("color: #1a7a1a;")
+        else:
+            self.reportCrossingsStatus.setText(
+                "✗  Stream Crossings — not yet run (go to Stream Crossings tab)"
+            )
+            self.reportCrossingsStatus.setStyleSheet("color: #888;")
+
+        if self._habitat_snapshot:
+            ts, layers = self._habitat_snapshot
+            layer_str = ", ".join(layers) if layers else "—"
+            self.reportHabitatStatus.setText(
+                f"✓  Habitat Triage  |  {ts}  |  {layer_str}"
+            )
+            self.reportHabitatStatus.setStyleSheet("color: #1a7a1a;")
+        else:
+            self.reportHabitatStatus.setText(
+                "✗  Habitat Triage — not yet run (go to Habitat Overlap tab)"
+            )
+            self.reportHabitatStatus.setStyleSheet("color: #888;")
 
     # ── Stream Crossings tab index in mainTabWidget ──────────────────
     _CROSSINGS_TAB_IDX = 1
@@ -1885,8 +2289,10 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         location   = self.reportLocationEdit.text().strip()    or "[Location]"
         preparer   = self.reportPreparerEdit.text().strip()    or "[Preparer]"
         date_str   = self.reportDateEdit.text().strip()        or datetime.date.today().strftime("%B %Y")
-        action     = self.reportActionEdit.toPlainText().strip()
-        pdfs_raw   = self.reportPDFsEdit.toPlainText().strip()
+        action      = self.reportActionEdit.toPlainText().strip()
+        pdfs_raw    = self.reportPDFsEdit.toPlainText().strip()
+        methodology = self.reportMethodologyEdit.toPlainText().strip()
+        data_gaps_raw = self.reportDataGapsEdit.toPlainText().strip()
 
         pdfs = [line.strip() for line in pdfs_raw.splitlines() if line.strip()]
 
@@ -1912,6 +2318,74 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             "",
         ]
 
+        # ── Key Findings (auto-generated) ──
+        key_findings = []
+
+        if self._crossings_data:
+            total_x   = len(self._crossings_data)
+            fb_x      = sum(1 for c in self._crossings_data if c.get("fish_bearing") == "Yes")
+            c3_x      = sum(1 for c in self._crossings_data if c.get("stream_class") == "Class 3")
+            c45_x     = sum(1 for c in self._crossings_data
+                            if c.get("stream_class") in ("Class 4", "Class 5"))
+            key_findings.append(
+                f"  • {total_x} stream crossings identified on proposed new trail construction "
+                f"({fb_x} fish-bearing Class 1/2, {c3_x} Class 3 field-verify, {c45_x} Class 4/5 desktop)."
+            )
+            if fb_x == 0:
+                key_findings.append(
+                    "  • No fish-bearing (Class 1 or 2) stream crossings identified — "
+                    "proposed alignment avoids all mapped fish-bearing streams."
+                )
+
+        if self._habitat_data:
+            total_mi_kf  = sum(r["miles"]        for r in self._habitat_data)
+            red_mi_kf    = sum(r["red_miles"]    for r in self._habitat_data)
+            green_mi_kf  = sum(r["green_miles"]  for r in self._habitat_data)
+            yellow_mi_kf = sum(r["yellow_miles"] for r in self._habitat_data)
+            red_trails_kf   = [r for r in self._habitat_data if r["triage"] == "RED"]
+            green_trails_kf = [r for r in self._habitat_data if r["triage"] == "GREEN"]
+            pct_green = (green_mi_kf / total_mi_kf * 100) if total_mi_kf > 0 else 0
+
+            key_findings.append(
+                f"  • {total_mi_kf:.2f} total project miles analyzed across "
+                f"{len(self._habitat_data)} trail segment(s)."
+            )
+            key_findings.append(
+                f"  • {pct_green:.0f}% of project mileage ({green_mi_kf:.2f} mi) is clear of "
+                f"all direct sensitive area conflicts (GREEN triage)."
+            )
+            if red_mi_kf > 0:
+                key_findings.append(
+                    f"  • {red_mi_kf:.3f} mi of direct sensitive area conflict (RED) requires "
+                    f"field verification across {len(red_trails_kf)} trail segment(s)."
+                )
+            if yellow_mi_kf > 0:
+                key_findings.append(
+                    f"  • {yellow_mi_kf:.3f} mi passes within the sensitive area proximity buffer "
+                    f"(YELLOW) — desktop review recommended before field allocation."
+                )
+
+        if self._habitat_data and self._crossings_data is not None:
+            red_mi_kf2 = sum(r["red_miles"] for r in self._habitat_data)
+            if red_mi_kf2 < 0.1:
+                key_findings.append(
+                    "  • GIS screening indicates potential Categorical Exclusion pathway — "
+                    "subject to specialist concurrence."
+                )
+            else:
+                key_findings.append(
+                    "  • GIS screening indicates Environmental Assessment (EA) pathway required."
+                )
+
+        lines.append(section("KEY FINDINGS"))
+        if key_findings:
+            lines += key_findings
+        else:
+            lines += [
+                "  [Run Stream Crossings and Habitat Overlap analyses to generate",
+                "   auto-populated key findings.]",
+            ]
+
         # ── Proposed Action ──
         lines.append(section("1. PROPOSED ACTION"))
         if action:
@@ -1928,8 +2402,30 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         else:
             lines.append("  [No project design features entered.]")
 
+        # ── Desktop Screening Methodology ──
+        lines.append(section("3. DESKTOP SCREENING METHODOLOGY / DATA SOURCES"))
+        if methodology:
+            for para in methodology.splitlines():
+                lines.append(f"  {para}")
+        else:
+            lines += [
+                "  [No methodology description entered.]",
+                "",
+                "  Recommended content:",
+                "  • Stream layer name and date received from FS",
+                "  • Trail alignment layer used for analysis",
+                "  • Road segment exclusion rationale",
+                "  • Preliminary crossing count from RFP scope vs. desktop result",
+                "  • Note requesting layer version confirmation with MRRD Hydrologist",
+            ]
+
         # ── Stream Crossings ──
-        lines.append(section("3. STREAM CROSSING ANALYSIS"))
+        lines.append(section("4. STREAM CROSSING ANALYSIS"))
+        if self._crossings_snapshot:
+            snap_time, snap_layers = self._crossings_snapshot
+            lines.append(f"  Analysis run : {snap_time}")
+            lines.append(f"  Hydro layers : {', '.join(snap_layers)}")
+            lines.append("")
         if not self._crossings_data:
             lines.append("  Stream crossing analysis not yet run.")
             lines.append("  Run the Stream Crossings tab first.")
@@ -2031,7 +2527,12 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 lines.append(f"  {nfb_note}")
 
         # ── Habitat / Trail Triage ──
-        lines.append(section("4. SENSITIVE AREA OVERLAP — TRAIL TRIAGE"))
+        lines.append(section("5. SENSITIVE AREA OVERLAP — TRAIL TRIAGE"))
+        if self._habitat_snapshot:
+            snap_time, snap_layers = self._habitat_snapshot
+            lines.append(f"  Analysis run    : {snap_time}")
+            lines.append(f"  Sensitive layers: {', '.join(snap_layers)}")
+            lines.append("")
         if not self._habitat_data:
             lines.append("  Habitat overlap analysis not yet run.")
             lines.append("  Run the Habitat Overlap tab first.")
@@ -2060,19 +2561,37 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                     f"{r['red_miles']:>7.3f}  {r['yellow_miles']:>7.3f}  "
                     f"{r['green_miles']:>7.3f}"
                 )
+                # Per-layer breakdown for this trail
+                layer_detail = r.get("layer_detail", {})
+                if layer_detail:
+                    for lyr_name in sorted(layer_detail):
+                        d = layer_detail[lyr_name]
+                        red_l   = d.get("red_mi",    0.0)
+                        yellow_l = d.get("yellow_mi", 0.0)
+                        lines.append(
+                            f"       {lyr_name[:38]:<38}  "
+                            f"RED: {red_l:>6.3f} mi  YLW: {yellow_l:>6.3f} mi"
+                        )
 
-            # Conflict layer summary
-            all_conflict_layers = set()
-            for r in self._habitat_data:
-                all_conflict_layers.update(r.get("layer_detail", {}).keys())
-
-            if all_conflict_layers:
-                lines += ["", "  Sensitive layers with direct or adjacent conflicts:"]
-                for lyr_name in sorted(all_conflict_layers):
-                    lines.append(f"    • {lyr_name}")
+        # ── Data Gaps ──
+        lines.append(section("6. DATA GAPS / OUTSTANDING QUESTIONS"))
+        data_gaps = [g.strip() for g in data_gaps_raw.splitlines() if g.strip()]
+        if data_gaps:
+            for i, gap in enumerate(data_gaps, 1):
+                lines.append(f"  {i:>2}. {gap}")
+        else:
+            lines += [
+                "  [No data gaps entered.]",
+                "",
+                "  Consider noting:",
+                "  • Stream layer version confirmation needed (MRRD Hydrologist)",
+                "  • Wetland delineation status",
+                "  • Class 3 fish distribution boundary verification",
+                "  • Pending specialist survey results",
+            ]
 
         # ── NEPA Recommendation ──
-        lines.append(section("5. NEPA RECOMMENDATION"))
+        lines.append(section("7. NEPA RECOMMENDATION"))
         if self._habitat_data and self._crossings_data is not None:
             red_trails   = [r for r in self._habitat_data if r["triage"] == "RED"]
             green_trails = [r for r in self._habitat_data if r["triage"] == "GREEN"]
@@ -2132,7 +2651,124 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         memo_text = "\n".join(lines)
         self.reportPreviewText.setPlainText(memo_text)
         self._report_text = memo_text
+        self._save_to_project()
         self.exportReportButton.setEnabled(True)
+
+    # ── Project persistence ─────────────────────────────────────────────
+
+    def _save_to_project(self):
+        """Persist report fields and analysis data to the QGIS project file."""
+        import json
+
+        fields = {
+            "project_name": self.reportProjectNameEdit.text(),
+            "forest":       self.reportForestEdit.text(),
+            "location":     self.reportLocationEdit.text(),
+            "preparer":     self.reportPreparerEdit.text(),
+            "date":         self.reportDateEdit.text(),
+            "action":       self.reportActionEdit.toPlainText(),
+            "pdfs":         self.reportPDFsEdit.toPlainText(),
+            "methodology":  self.reportMethodologyEdit.toPlainText(),
+            "data_gaps":    self.reportDataGapsEdit.toPlainText(),
+        }
+
+        # Crossings — strip non-serializable QgsPointXY object
+        crossings_serial = [
+            {k: v for k, v in c.items() if k != "point"}
+            for c in self._crossings_data
+        ]
+
+        snap_c = None
+        if self._crossings_snapshot:
+            snap_c = {"time": self._crossings_snapshot[0],
+                      "layers": self._crossings_snapshot[1]}
+
+        # Habitat — strip QgsGeometry objects
+        _geom_keys = {"red_geom", "yellow_geom", "green_geom", "geom"}
+        habitat_serial = [
+            {k: v for k, v in r.items() if k not in _geom_keys}
+            for r in self._habitat_data
+        ]
+
+        snap_h = None
+        if self._habitat_snapshot:
+            snap_h = {"time": self._habitat_snapshot[0],
+                      "layers": self._habitat_snapshot[1]}
+
+        state = {
+            "fields":             fields,
+            "crossings":          crossings_serial,
+            "crossings_snapshot": snap_c,
+            "habitat":            habitat_serial,
+            "habitat_snapshot":   snap_h,
+            "laa_layer_types":    self._laa_layer_types,
+        }
+
+        try:
+            QgsProject.instance().writeEntry(
+                "MTBDesignToolsNEPA", "state", json.dumps(state)
+            )
+        except Exception:
+            pass
+
+    def _load_from_project(self):
+        """Restore report fields and analysis data from the QGIS project file."""
+        import json
+
+        raw, ok = QgsProject.instance().readEntry("MTBDesignToolsNEPA", "state", "")
+        if not ok or not raw:
+            return
+
+        try:
+            state = json.loads(raw)
+        except (ValueError, TypeError):
+            return
+
+        # Report text fields — only overwrite if a saved value exists
+        fields = state.get("fields", {})
+        restore_map = [
+            ("project_name", self.reportProjectNameEdit,  "setText"),
+            ("forest",       self.reportForestEdit,        "setText"),
+            ("location",     self.reportLocationEdit,      "setText"),
+            ("preparer",     self.reportPreparerEdit,      "setText"),
+            ("date",         self.reportDateEdit,          "setText"),
+            ("action",       self.reportActionEdit,        "setPlainText"),
+            ("pdfs",         self.reportPDFsEdit,          "setPlainText"),
+            ("methodology",  self.reportMethodologyEdit,   "setPlainText"),
+            ("data_gaps",    self.reportDataGapsEdit,      "setPlainText"),
+        ]
+        for key, widget, method in restore_map:
+            val = fields.get(key, "")
+            if val:
+                getattr(widget, method)(val)
+
+        # Crossings data + snapshot
+        crossings = state.get("crossings", [])
+        if crossings:
+            self._crossings_data = crossings
+
+        snap_c = state.get("crossings_snapshot")
+        if snap_c:
+            self._crossings_snapshot = (snap_c["time"], snap_c["layers"])
+
+        # Habitat data + snapshot
+        habitat = state.get("habitat", [])
+        if habitat:
+            self._habitat_data = habitat
+
+        snap_h = state.get("habitat_snapshot")
+        if snap_h:
+            self._habitat_snapshot = (snap_h["time"], snap_h["layers"])
+
+        laa_types = state.get("laa_layer_types", {})
+        if laa_types:
+            self._laa_layer_types = laa_types
+
+        if self._habitat_data:
+            self.exportHabitatButton.setEnabled(True)
+            self.exportLAAButton.setEnabled(True)
+
+        self._update_report_status()
 
     def export_report(self):
         if not getattr(self, "_report_text", None):
