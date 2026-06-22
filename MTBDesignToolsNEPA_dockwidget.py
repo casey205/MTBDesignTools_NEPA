@@ -1779,7 +1779,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         lines += [
             "",
             "─" * 66,
-            "✓ 'Trail Triage - MTB NEPA' layer added to map (segments colored RED/YLW/GRN).",
+            f"✓ 'Triage - {self._active_slot_name()}' layer added to map (segments colored RED/YLW/GRN).",
             "  Use 'Export Triage Shapefile' to save for the NEPA scoping memo.",
         ]
 
@@ -1793,7 +1793,8 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             QgsCategorizedSymbolRenderer, QgsRendererCategory, QgsLineSymbol
         )
 
-        for lyr in QgsProject.instance().mapLayersByName("Trail Triage - MTB NEPA"):
+        layer_name = f"Triage - {self._active_slot_name()}"
+        for lyr in QgsProject.instance().mapLayersByName(layer_name):
             QgsProject.instance().removeMapLayer(lyr.id())
 
         if not results:
@@ -1801,7 +1802,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
 
         crs_str = trail_lyr.crs().authid() if trail_lyr else "EPSG:4326"
         mem_layer = QgsVectorLayer(
-            f"MultiLineString?crs={crs_str}", "Trail Triage - MTB NEPA", "memory"
+            f"MultiLineString?crs={crs_str}", layer_name, "memory"
         )
         provider = mem_layer.dataProvider()
         provider.addAttributes([
@@ -2202,8 +2203,11 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 f"No results for '{self._active_slot_name()}' yet. Run the triage analysis first.")
             return
 
+        import re as _re, os as _os
+        _safe = _re.sub(r'[^\w]+', '_', self._active_slot_name()).strip('_')
+        _default = _os.path.join(_os.path.expanduser("~"), f"Triage_{_safe}.shp")
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Trail Triage Shapefile", "", "Shapefile (*.shp)"
+            self, "Export Trail Triage Shapefile", _default, "Shapefile (*.shp)"
         )
         if not path:
             return
