@@ -1904,7 +1904,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             return
 
         # Show type-assignment dialog
-        layer_types = self._show_laa_type_dialog(sensitive_layers)
+        layer_types, overlap_only = self._show_laa_type_dialog(sensitive_layers)
         if layer_types is None:
             return  # user cancelled
 
@@ -1919,7 +1919,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         if not path:
             return
 
-        self._run_laa_export(sensitive_layers, layer_types, path)
+        self._run_laa_export(sensitive_layers, layer_types, path, overlap_only=overlap_only)
 
     def _show_laa_type_dialog(self, sensitive_layers):
         """
@@ -1972,6 +1972,18 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         info.setStyleSheet("color: #555; font-style: italic;")
         layout.addWidget(info)
 
+        from qgis.PyQt.QtWidgets import QCheckBox
+        overlap_chk = QCheckBox(
+            "Only export trails with at least one LAA overlap\n"
+            "(uncheck to include all trails with full Yes/No attribute context)"
+        )
+        overlap_chk.setChecked(True)
+        overlap_chk.setToolTip(
+            "Checked: shapefile contains only trail segments that fall inside a sensitive area.\n"
+            "Unchecked: all trail segments are exported; non-overlapping segments show No for all LAA fields."
+        )
+        layout.addWidget(overlap_chk)
+
         btn_row = QHBoxLayout()
         btn_export = QPushButton("Export LAA Shapefile")
         btn_cancel = QPushButton("Cancel")
@@ -1985,18 +1997,20 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
 
         from qgis.PyQt.QtWidgets import QDialog as _QD
         if dlg.exec_() != _QD.Accepted:
-            return None
+            return None, True
 
         result = {}
         for row, lyr in enumerate(sensitive_layers):
             combo = tbl.cellWidget(row, 1)
             result[lyr.name()] = combo.currentText() if combo else "General Sensitive Area"
-        return result
+        return result, overlap_chk.isChecked()
 
-    def _run_laa_export(self, sensitive_layers, layer_types, path):
+    def _run_laa_export(self, sensitive_layers, layer_types, path, overlap_only=True):
         """
         Segment each trail at polygon boundaries from all active typed layers,
         label each segment by LAA category, and write the output shapefile.
+
+        overlap_only: if True, only segments with at least one LAA=Yes are written.
         """
         trail_lyr = trail_layer() or self.iface.activeLayer()
         if not trail_lyr:
@@ -2096,6 +2110,10 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 if seg_mi < 0.00005:
                     continue
 
+                # When overlap_only is set, skip segments with no LAA conflict
+                if overlap_only and not any(type_in.values()):
+                    continue
+
                 feat = QgsFeature()
                 feat.setGeometry(seg_geom)
                 feat.setFields(fields)
@@ -2115,9 +2133,10 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         if laa_layer.isValid():
             QgsProject.instance().addMapLayer(laa_layer)
 
+        scope = "overlapping" if overlap_only else "all"
         QMessageBox.information(
             self, "LAA Export Complete",
-            f"Exported {total_segments} trail segments to:\n{path}\n\n"
+            f"Exported {total_segments} {scope} trail segment(s) to:\n{path}\n\n"
             f"LAA fields: {', '.join(self.LAA_FIELD_MAP.get(t, t) for t in used_types)}\n\n"
             "Layer added to map canvas. Style by LAA field in QGIS to review."
         )
