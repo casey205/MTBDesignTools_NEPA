@@ -2731,6 +2731,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 "  sensitive layers, then click Run Triage Analysis.",
             ]
         else:
+            flagged_only = self.reportFlaggedOnlyCheck.isChecked()
             subsection_bar = "─" * 62
             for slot_name_5, slot_5 in self._habitat_slots.items():
                 data_5 = slot_5.get("data", [])
@@ -2758,6 +2759,9 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 yellow_mi_5 = sum(r["yellow_miles"] for r in data_5)
                 green_mi_5  = sum(r["green_miles"]  for r in data_5)
                 pct_clear_5 = (green_mi_5 / total_mi_5 * 100) if total_mi_5 > 0 else 0
+                n_green_5   = sum(1 for r in data_5 if r["triage"] == "GREEN")
+                n_red_5     = sum(1 for r in data_5 if r["triage"] == "RED")
+                n_yellow_5  = sum(1 for r in data_5 if r["triage"] == "YELLOW")
 
                 lines += [
                     f"  Total mileage analyzed    : {total_mi_5:.3f} mi",
@@ -2769,10 +2773,33 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                     else f"  Miles - within buffer zone: {yellow_mi_5:.3f} mi",
                     f"  Miles - clear of all areas: {green_mi_5:.3f} mi  ({pct_clear_5:.1f}%)",
                     "",
+                ]
+
+                # Determine which rows to show in the detail table
+                table_rows = [
+                    r for r in data_5
+                    if (not flagged_only) or r["triage"] in ("RED", "YELLOW")
+                ]
+
+                if flagged_only and n_green_5 > 0:
+                    lines.append(
+                        f"  NOTE: {n_green_5} trail segment(s) with {green_mi_5:.3f} mi are clear "
+                        f"of all direct sensitive area conflicts (GREEN) and are not listed below."
+                    )
+                    lines.append("")
+
+                if not table_rows:
+                    lines.append(
+                        "  FINDING: No direct sensitive area conflicts detected. "
+                        f"All {len(data_5)} trail segment(s) are clear (GREEN)."
+                    )
+                    continue
+
+                lines += [
                     f"  {'Trail':<30} {'Total':>6}  {'RED mi':>7}  {'YLW mi':>7}  {'GRN mi':>7}",
                     f"  {subsection_bar}",
                 ]
-                for r in data_5:
+                for r in table_rows:
                     icon = {"RED": "[R]", "YELLOW": "[Y]", "GREEN": "[G]"}[r["triage"]]
                     lines.append(
                         f"  {icon} {r['trail'][:28]:<28} {r['miles']:>6.2f}  "
@@ -2785,10 +2812,11 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                             d5 = layer_detail_5[lyr_name_5]
                             red_l5    = d5.get("red_mi",    0.0)
                             yellow_l5 = d5.get("yellow_mi", 0.0)
-                            lines.append(
-                                f"       {lyr_name_5[:38]:<38}  "
-                                f"RED: {red_l5:>6.3f} mi  YLW: {yellow_l5:>6.3f} mi"
-                            )
+                            if red_l5 > 0.001 or yellow_l5 > 0.001:
+                                lines.append(
+                                    f"       {lyr_name_5[:38]:<38}  "
+                                    f"RED: {red_l5:>6.3f} mi  YLW: {yellow_l5:>6.3f} mi"
+                                )
 
         # ── Data Gaps ──
         lines.append(section("6. DATA GAPS / OUTSTANDING QUESTIONS"))

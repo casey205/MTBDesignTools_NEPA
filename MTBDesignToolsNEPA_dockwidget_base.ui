@@ -1225,6 +1225,22 @@ NSO ARU survey results pending — nest patch overlap TBD</string>
          </widget>
         </item>
 
+        <!-- Memo detail level toggle -->
+        <item>
+         <widget class="QCheckBox" name="reportFlaggedOnlyCheck">
+          <property name="text">
+           <string>Report flagged trails only (hide GREEN / clear segments)</string>
+          </property>
+          <property name="toolTip">
+           <string>Checked: Section 5 tables show only RED and YELLOW trail segments — cleaner for FS specialist review.
+Unchecked: all trails listed including GREEN (clear) segments — useful for internal QA or a complete project record.</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+
         <!-- Generate + Export buttons -->
         <item>
          <layout class="QHBoxLayout" name="reportButtonRow">
