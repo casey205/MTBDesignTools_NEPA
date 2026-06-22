@@ -1357,6 +1357,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         self.refreshHabitatButton.clicked.connect(self._refresh_habitat_tab)
         self.habitatGroupCombo.currentIndexChanged.connect(self.populate_habitat_list)
         self.selectAllHabitatButton.clicked.connect(self._select_all_habitat)
+        self.habitatListWidget.itemSelectionChanged.connect(self._on_habitat_selection_changed)
         self.runHabitatButton.clicked.connect(self.run_habitat_analysis)
         self.exportHabitatButton.clicked.connect(self.export_habitat_triage)
         self.exportLAAButton.clicked.connect(self.export_laa_shapefile)
@@ -1447,6 +1448,18 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
 
     def _select_all_habitat(self):
         self.habitatListWidget.selectAll()
+
+    def _on_habitat_selection_changed(self):
+        """When exactly one sensitive layer is selected, auto-fill the category
+        combo with that layer's name so the output files match automatically."""
+        selected = self.habitatListWidget.selectedItems()
+        if len(selected) == 1:
+            layer_name = selected[0].text()
+            self.habitatSlotCombo.blockSignals(True)
+            self.habitatSlotCombo.setCurrentText(layer_name)
+            self.habitatSlotCombo.blockSignals(False)
+            # Update the results display for the newly named slot without creating it
+            self._on_slot_changed()
 
     def _get_selected_habitat_layers(self):
         layers = []
