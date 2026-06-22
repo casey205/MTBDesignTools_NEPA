@@ -281,11 +281,15 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         self.setupUi(self)
 
         self._crossings_data = []
-        self._habitat_data = []
         self._crossings_exported = False  # tracks whether annotations have been exported
         self._crossings_snapshot = None   # (timestamp_str, [layer_name, ...])
-        self._habitat_snapshot = None     # (timestamp_str, [layer_name, ...])
-        self._laa_layer_types = {}        # {layer_name: LAA type string}
+
+        # Named analysis slots: each category (NSO, Hydro, Wetlands, …) stores its
+        # own triage results independently so they never overwrite one another.
+        self._habitat_slots = {
+            name: {"data": [], "snapshot": None, "laa_types": {}, "display_text": ""}
+            for name in self.DEFAULT_HABITAT_SLOTS
+        }
 
         self._setup_profile_tab()
         self._setup_crossings_tab()
@@ -969,6 +973,17 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         self.exportCrossingsButton.setEnabled(bool(all_crossings))
 
     # Crossing type options for fish-bearing (Class 1 & 2) crossings
+    # Named analysis categories — each stores its own triage results independently
+    # so NSO, Hydrology, Wetlands, etc. don't overwrite each other.
+    DEFAULT_HABITAT_SLOTS = [
+        "NSO / Wildlife",
+        "Hydrology / Riparian",
+        "Wetlands",
+        "Species Occurrences",
+        "LRMP Allocations",
+        "Botany / SHAB",
+    ]
+
     LAA_TYPES = [
         "NSO Habitat",
         "Critical Habitat",
@@ -1277,7 +1292,48 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
     # Tab 2: Habitat Overlap / Trail Triage
     # ──────────────────────────────────────────────
 
+    # ── Named-slot helpers ───────────────────────────────────────────────
+
+    def _active_slot_name(self):
+        """Return the current category name shown in the slot combo."""
+        return self.habitatSlotCombo.currentText()
+
+    def _active_slot(self):
+        """Return (and lazily create) the dict for the currently selected slot."""
+        name = self._active_slot_name()
+        if name not in self._habitat_slots:
+            self._habitat_slots[name] = {
+                "data": [], "snapshot": None, "laa_types": {}, "display_text": ""
+            }
+        return self._habitat_slots[name]
+
+    def _on_slot_changed(self, _idx):
+        """Restore stored results display when the user switches analysis categories."""
+        slot = self._active_slot()
+        text = slot.get("display_text", "")
+        if text:
+            self.habitatResultsText.setPlainText(text)
+        else:
+            name = self._active_slot_name()
+            self.habitatResultsText.setPlainText(
+                f"No analysis run for '{name}' yet.\n"
+                "Select sensitive layers above, then click Run Triage Analysis."
+            )
+        has_data = bool(slot.get("data"))
+        self.exportHabitatButton.setEnabled(has_data)
+        self.exportLAAButton.setEnabled(has_data)
+
+    # ────────────────────────────────────────────────────────────────────
+
     def _setup_habitat_tab(self):
+        # Populate the named-slot combo before connecting its signal so we
+        # don't trigger _on_slot_changed with an empty widget.
+        self.habitatSlotCombo.blockSignals(True)
+        for name in self.DEFAULT_HABITAT_SLOTS:
+            self.habitatSlotCombo.addItem(name)
+        self.habitatSlotCombo.blockSignals(False)
+        self.habitatSlotCombo.currentIndexChanged.connect(self._on_slot_changed)
+
         self.refreshHabitatButton.clicked.connect(self._refresh_habitat_tab)
         self.habitatGroupCombo.currentIndexChanged.connect(self.populate_habitat_list)
         self.selectAllHabitatButton.clicked.connect(self._select_all_habitat)
@@ -1612,9 +1668,10 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         _order = {"RED": 0, "YELLOW": 1, "GREEN": 2}
         results.sort(key=lambda r: (_order[r["triage"]], r["trail"]))
 
-        self._habitat_data = results
         import datetime as _dt
-        self._habitat_snapshot = (
+        slot = self._active_slot()
+        slot["data"] = results
+        slot["snapshot"] = (
             _dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
             [lyr.name() for lyr in sensitive_layers],
         )
@@ -1726,7 +1783,10 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             "  Use 'Export Triage Shapefile' to save for the NEPA scoping memo.",
         ]
 
-        self.habitatResultsText.setPlainText("\n".join(lines))
+        text = "\n".join(lines)
+        self.habitatResultsText.setPlainText(text)
+        # Cache the display text so switching slots restores the correct view
+        self._active_slot()["display_text"] = text
 
     def _add_habitat_layer_to_map(self, results, trail_lyr):
         from qgis.core import (
@@ -1807,12 +1867,13 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
 
     def export_laa_shapefile(self):
         """Entry point: assign layer types, then run the LAA segmentation export."""
-        if not self._habitat_snapshot:
+        slot = self._active_slot()
+        if not slot["snapshot"]:
             QMessageBox.warning(self, "LAA Export",
-                "Run the Habitat Overlap analysis first.")
+                f"Run the Habitat Overlap analysis for '{self._active_slot_name()}' first.")
             return
 
-        _, snap_layer_names = self._habitat_snapshot
+        _, snap_layer_names = slot["snapshot"]
 
         # Resolve snapshot layer names to live QgsVectorLayer objects
         sensitive_layers = []
@@ -1846,8 +1907,8 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         if layer_types is None:
             return  # user cancelled
 
-        # Persist the assignments
-        self._laa_layer_types = layer_types
+        # Persist the assignments into this slot
+        self._active_slot()["laa_types"] = layer_types
         self._save_to_project()
 
         # Ask where to save
@@ -1896,7 +1957,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             tbl.setItem(row, 0, QTableWidgetItem(lyr.name()))
             combo = QComboBox()
             combo.addItems(self.LAA_TYPES)
-            saved = self._laa_layer_types.get(lyr.name(), "General Sensitive Area")
+            saved = self._active_slot()["laa_types"].get(lyr.name(), "General Sensitive Area")
             if saved in self.LAA_TYPES:
                 combo.setCurrentText(saved)
             tbl.setCellWidget(row, 1, combo)
@@ -2136,8 +2197,9 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         return segments
 
     def export_habitat_triage(self):
-        if not self._habitat_data:
-            QMessageBox.information(self, "Export", "Run the triage analysis first.")
+        if not self._active_slot()["data"]:
+            QMessageBox.information(self, "Export",
+                f"No results for '{self._active_slot_name()}' yet. Run the triage analysis first.")
             return
 
         path, _ = QFileDialog.getSaveFileName(
@@ -2171,7 +2233,8 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             ("green_geom",  "GREEN"),
         ]
 
-        for r in self._habitat_data:
+        slot_data = self._active_slot()["data"]
+        for r in slot_data:
             for geom_key, seg_type in seg_configs:
                 seg_geom = r.get(geom_key)
                 if not seg_geom or seg_geom.isEmpty():
@@ -2198,9 +2261,9 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
 
         del writer
 
-        red_mi    = sum(r["red_miles"]    for r in self._habitat_data)
-        yellow_mi = sum(r["yellow_miles"] for r in self._habitat_data)
-        green_mi  = sum(r["green_miles"]  for r in self._habitat_data)
+        red_mi    = sum(r["red_miles"]    for r in slot_data)
+        yellow_mi = sum(r["yellow_miles"] for r in slot_data)
+        green_mi  = sum(r["green_miles"]  for r in slot_data)
         QMessageBox.information(
             self, "Export Complete",
             f"Exported trail segments to:\n{path}\n\n"
@@ -2242,16 +2305,33 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             )
             self.reportCrossingsStatus.setStyleSheet("color: #888;")
 
-        if self._habitat_snapshot:
-            ts, layers = self._habitat_snapshot
-            layer_str = ", ".join(layers) if layers else "—"
-            self.reportHabitatStatus.setText(
-                f"✓  Habitat Triage  |  {ts}  |  {layer_str}"
+        # Build a multi-line status line for all habitat slots
+        habitat_lines = []
+        any_run = False
+        for name, slot in self._habitat_slots.items():
+            snap = slot.get("snapshot")
+            data = slot.get("data", [])
+            if snap:
+                any_run = True
+                ts, layers = snap
+                red_mi = sum(r["red_miles"] for r in data)
+                n_trails = len(data)
+                habitat_lines.append(
+                    f"✓  {name}  |  {ts}  |  {n_trails} trails  |  "
+                    f"{red_mi:.3f} mi RED  |  "
+                    f"{', '.join(layers[:2])}{'…' if len(layers) > 2 else ''}"
+                )
+            else:
+                habitat_lines.append(f"✗  {name} — not yet run")
+
+        if habitat_lines:
+            self.reportHabitatStatus.setText("\n".join(habitat_lines))
+            self.reportHabitatStatus.setStyleSheet(
+                "color: #1a7a1a;" if any_run else "color: #888;"
             )
-            self.reportHabitatStatus.setStyleSheet("color: #1a7a1a;")
         else:
             self.reportHabitatStatus.setText(
-                "✗  Habitat Triage — not yet run (go to Habitat Overlap tab)"
+                "✗  Habitat Triage — no categories run yet"
             )
             self.reportHabitatStatus.setStyleSheet("color: #888;")
 
@@ -2377,37 +2457,53 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                     "proposed alignment avoids all mapped fish-bearing streams."
                 )
 
-        if self._habitat_data:
-            total_mi_kf  = sum(r["miles"]        for r in self._habitat_data)
-            red_mi_kf    = sum(r["red_miles"]    for r in self._habitat_data)
-            green_mi_kf  = sum(r["green_miles"]  for r in self._habitat_data)
-            yellow_mi_kf = sum(r["yellow_miles"] for r in self._habitat_data)
-            red_trails_kf   = [r for r in self._habitat_data if r["triage"] == "RED"]
-            green_trails_kf = [r for r in self._habitat_data if r["triage"] == "GREEN"]
-            pct_green = (green_mi_kf / total_mi_kf * 100) if total_mi_kf > 0 else 0
-
+        # Aggregate key findings from all populated habitat slots
+        populated_slots_kf = [
+            (name, slot) for name, slot in self._habitat_slots.items()
+            if slot.get("data")
+        ]
+        if populated_slots_kf:
+            # Use the first populated slot for total-project miles (all slots analyze
+            # the same trail network — they differ only in which sensitive layers are used)
+            first_data_kf = populated_slots_kf[0][1]["data"]
+            total_mi_kf = sum(r["miles"] for r in first_data_kf)
+            n_trails_kf = len(first_data_kf)
             key_findings.append(
                 f"  • {total_mi_kf:.2f} total project miles analyzed across "
-                f"{len(self._habitat_data)} trail segment(s)."
+                f"{n_trails_kf} trail segment(s) ({len(populated_slots_kf)} "
+                f"screening categor{'y' if len(populated_slots_kf) == 1 else 'ies'} run)."
             )
-            key_findings.append(
-                f"  • {pct_green:.0f}% of project mileage ({green_mi_kf:.2f} mi) is clear of "
-                f"all direct sensitive area conflicts (GREEN triage)."
-            )
-            if red_mi_kf > 0:
-                key_findings.append(
-                    f"  • {red_mi_kf:.3f} mi of direct sensitive area conflict (RED) requires "
-                    f"field verification across {len(red_trails_kf)} trail segment(s)."
-                )
-            if yellow_mi_kf > 0:
-                key_findings.append(
-                    f"  • {yellow_mi_kf:.3f} mi passes within the sensitive area proximity buffer "
-                    f"(YELLOW) — desktop review recommended before field allocation."
-                )
+            for slot_name_kf, slot_kf in populated_slots_kf:
+                data_kf = slot_kf["data"]
+                red_mi_kf    = sum(r["red_miles"]    for r in data_kf)
+                green_mi_kf  = sum(r["green_miles"]  for r in data_kf)
+                yellow_mi_kf = sum(r["yellow_miles"] for r in data_kf)
+                pct_green = (green_mi_kf / total_mi_kf * 100) if total_mi_kf > 0 else 0
+                red_trails_kf = [r for r in data_kf if r["triage"] == "RED"]
+                if red_mi_kf > 0:
+                    key_findings.append(
+                        f"  • {slot_name_kf}: {red_mi_kf:.3f} mi direct conflict (RED) across "
+                        f"{len(red_trails_kf)} segment(s); {pct_green:.0f}% clear."
+                    )
+                else:
+                    key_findings.append(
+                        f"  • {slot_name_kf}: All segments clear of direct sensitive area "
+                        f"conflicts ({pct_green:.0f}% GREEN)."
+                    )
+                if yellow_mi_kf > 0:
+                    key_findings.append(
+                        f"    ↳ {yellow_mi_kf:.3f} mi within proximity buffer (YELLOW) — "
+                        f"desktop review recommended."
+                    )
 
-        if self._habitat_data and self._crossings_data is not None:
-            red_mi_kf2 = sum(r["red_miles"] for r in self._habitat_data)
-            if red_mi_kf2 < 0.1:
+        # CE / EA pathway signal — aggregate worst-case RED across all slots
+        any_hab_data = any(s.get("data") for s in self._habitat_slots.values())
+        if any_hab_data and self._crossings_data is not None:
+            total_red_all = sum(
+                sum(r["red_miles"] for r in s["data"])
+                for s in self._habitat_slots.values() if s.get("data")
+            )
+            if total_red_all < 0.1:
                 key_findings.append(
                     "  • GIS screening indicates potential Categorical Exclusion pathway — "
                     "subject to specialist concurrence."
@@ -2566,52 +2662,75 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 lines += ["", f"  Non-Fish-Bearing Crossings (Class 3–5, n={nfb_count}):"]
                 lines.append(f"  {nfb_note}")
 
-        # ── Habitat / Trail Triage ──
+        # ── Habitat / Trail Triage — one subsection per named category ──
         lines.append(section("5. SENSITIVE AREA OVERLAP — TRAIL TRIAGE"))
-        if self._habitat_snapshot:
-            snap_time, snap_layers = self._habitat_snapshot
-            lines.append(f"  Analysis run    : {snap_time}")
-            lines.append(f"  Sensitive layers: {', '.join(snap_layers)}")
-            lines.append("")
-        if not self._habitat_data:
-            lines.append("  Habitat overlap analysis not yet run.")
-            lines.append("  Run the Habitat Overlap tab first.")
-        else:
-            total_mi    = sum(r["miles"]        for r in self._habitat_data)
-            red_mi      = sum(r["red_miles"]    for r in self._habitat_data)
-            yellow_mi   = sum(r["yellow_miles"] for r in self._habitat_data)
-            green_mi    = sum(r["green_miles"]  for r in self._habitat_data)
-            pct_clear   = (green_mi / total_mi * 100) if total_mi > 0 else 0
 
+        any_triage_run = any(s.get("data") for s in self._habitat_slots.values())
+        if not any_triage_run:
             lines += [
-                f"  Total project mileage     : {total_mi:.3f} mi",
-                f"  Miles - direct conflict   : {red_mi:.3f} mi  ({red_mi/total_mi*100:.1f}%)"
-                if total_mi > 0 else f"  Miles - direct conflict   : {red_mi:.3f} mi",
-                f"  Miles - within buffer zone: {yellow_mi:.3f} mi  ({yellow_mi/total_mi*100:.1f}%)"
-                if total_mi > 0 else f"  Miles - within buffer zone: {yellow_mi:.3f} mi",
-                f"  Miles - clear of all areas: {green_mi:.3f} mi  ({pct_clear:.1f}%)",
-                "",
-                f"  {'Trail':<30} {'Total':>6}  {'RED mi':>7}  {'YLW mi':>7}  {'GRN mi':>7}",
-                f"  {'─'*62}",
+                "  Habitat overlap analysis not yet run.",
+                "  Go to the Habitat Overlap tab, select an analysis category and",
+                "  sensitive layers, then click Run Triage Analysis.",
             ]
-            for r in self._habitat_data:
-                icon = {"RED": "[R]", "YELLOW": "[Y]", "GREEN": "[G]"}[r["triage"]]
-                lines.append(
-                    f"  {icon} {r['trail'][:28]:<28} {r['miles']:>6.2f}  "
-                    f"{r['red_miles']:>7.3f}  {r['yellow_miles']:>7.3f}  "
-                    f"{r['green_miles']:>7.3f}"
-                )
-                # Per-layer breakdown for this trail
-                layer_detail = r.get("layer_detail", {})
-                if layer_detail:
-                    for lyr_name in sorted(layer_detail):
-                        d = layer_detail[lyr_name]
-                        red_l   = d.get("red_mi",    0.0)
-                        yellow_l = d.get("yellow_mi", 0.0)
-                        lines.append(
-                            f"       {lyr_name[:38]:<38}  "
-                            f"RED: {red_l:>6.3f} mi  YLW: {yellow_l:>6.3f} mi"
-                        )
+        else:
+            subsection_bar = "─" * 62
+            for slot_name_5, slot_5 in self._habitat_slots.items():
+                data_5 = slot_5.get("data", [])
+                snap_5 = slot_5.get("snapshot")
+
+                lines += [
+                    "",
+                    f"  ── {slot_name_5} " + "─" * max(2, 58 - len(slot_name_5)),
+                ]
+
+                if snap_5:
+                    ts_5, layers_5 = snap_5
+                    lines.append(f"  Analysis run    : {ts_5}")
+                    lines.append(f"  Sensitive layers: {', '.join(layers_5)}")
+                    lines.append("")
+
+                if not data_5:
+                    lines.append(
+                        "  Not yet run — select this category in the Habitat Overlap tab and run."
+                    )
+                    continue
+
+                total_mi_5  = sum(r["miles"]        for r in data_5)
+                red_mi_5    = sum(r["red_miles"]    for r in data_5)
+                yellow_mi_5 = sum(r["yellow_miles"] for r in data_5)
+                green_mi_5  = sum(r["green_miles"]  for r in data_5)
+                pct_clear_5 = (green_mi_5 / total_mi_5 * 100) if total_mi_5 > 0 else 0
+
+                lines += [
+                    f"  Total mileage analyzed    : {total_mi_5:.3f} mi",
+                    f"  Miles - direct conflict   : {red_mi_5:.3f} mi  "
+                    f"({red_mi_5 / total_mi_5 * 100:.1f}%)" if total_mi_5 > 0
+                    else f"  Miles - direct conflict   : {red_mi_5:.3f} mi",
+                    f"  Miles - within buffer zone: {yellow_mi_5:.3f} mi  "
+                    f"({yellow_mi_5 / total_mi_5 * 100:.1f}%)" if total_mi_5 > 0
+                    else f"  Miles - within buffer zone: {yellow_mi_5:.3f} mi",
+                    f"  Miles - clear of all areas: {green_mi_5:.3f} mi  ({pct_clear_5:.1f}%)",
+                    "",
+                    f"  {'Trail':<30} {'Total':>6}  {'RED mi':>7}  {'YLW mi':>7}  {'GRN mi':>7}",
+                    f"  {subsection_bar}",
+                ]
+                for r in data_5:
+                    icon = {"RED": "[R]", "YELLOW": "[Y]", "GREEN": "[G]"}[r["triage"]]
+                    lines.append(
+                        f"  {icon} {r['trail'][:28]:<28} {r['miles']:>6.2f}  "
+                        f"{r['red_miles']:>7.3f}  {r['yellow_miles']:>7.3f}  "
+                        f"{r['green_miles']:>7.3f}"
+                    )
+                    layer_detail_5 = r.get("layer_detail", {})
+                    if layer_detail_5:
+                        for lyr_name_5 in sorted(layer_detail_5):
+                            d5 = layer_detail_5[lyr_name_5]
+                            red_l5    = d5.get("red_mi",    0.0)
+                            yellow_l5 = d5.get("yellow_mi", 0.0)
+                            lines.append(
+                                f"       {lyr_name_5[:38]:<38}  "
+                                f"RED: {red_l5:>6.3f} mi  YLW: {yellow_l5:>6.3f} mi"
+                            )
 
         # ── Data Gaps ──
         lines.append(section("6. DATA GAPS / OUTSTANDING QUESTIONS"))
@@ -2632,39 +2751,72 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
 
         # ── NEPA Recommendation ──
         lines.append(section("7. NEPA RECOMMENDATION"))
-        if self._habitat_data and self._crossings_data is not None:
-            red_trails   = [r for r in self._habitat_data if r["triage"] == "RED"]
-            green_trails = [r for r in self._habitat_data if r["triage"] == "GREEN"]
-            total_mi     = sum(r["miles"] for r in self._habitat_data)
-            green_mi_sum = sum(r["green_miles"] for r in self._habitat_data)
-            red_mi_sum   = sum(r["red_miles"]   for r in self._habitat_data)
+        populated_slots_rec = [
+            (nm, sl) for nm, sl in self._habitat_slots.items() if sl.get("data")
+        ]
+        if populated_slots_rec and self._crossings_data is not None:
+            # Build worst-triage per trail across all populated slots.
+            # Same trail may appear in multiple categories; take the most
+            # conservative (highest-risk) triage and max RED/YELLOW miles.
+            triage_rank = {"RED": 0, "YELLOW": 1, "GREEN": 2}
+            trail_worst_rec = {}
+            for _, sl_rec in populated_slots_rec:
+                for r in sl_rec["data"]:
+                    t = r["trail"]
+                    if t not in trail_worst_rec:
+                        trail_worst_rec[t] = {
+                            "triage": r["triage"],
+                            "miles": r["miles"],
+                            "red_miles": r["red_miles"],
+                            "green_miles": r["green_miles"],
+                        }
+                    else:
+                        ex = trail_worst_rec[t]
+                        if triage_rank[r["triage"]] < triage_rank[ex["triage"]]:
+                            ex["triage"] = r["triage"]
+                        ex["red_miles"]   = max(ex["red_miles"],   r["red_miles"])
+                        ex["green_miles"] = min(ex["green_miles"], r["green_miles"])
 
-            if red_mi_sum < 0.1 and len(red_trails) == 0:
+            all_rec = list(trail_worst_rec.values())
+            red_trails_rec   = [r for r in all_rec if r["triage"] == "RED"]
+            total_mi_rec     = sum(r["miles"] for r in all_rec)
+            green_mi_rec     = sum(r["green_miles"] for r in all_rec)
+            red_mi_rec       = sum(r["red_miles"]   for r in all_rec)
+            cats_run = len(populated_slots_rec)
+
+            lines += [
+                f"  Based on {cats_run} screening categor{'y' if cats_run == 1 else 'ies'} "
+                f"across {len(all_rec)} trail segment(s) / {total_mi_rec:.2f} mi:",
+                "",
+            ]
+
+            if red_mi_rec < 0.1 and len(red_trails_rec) == 0:
                 lines += [
                     "  CATEGORICAL EXCLUSION (CE) — All trail segments are clear of direct",
-                    "  sensitive area conflicts. Based on this GIS screening, the proposed",
-                    f"  project ({total_mi:.2f} mi) meets the criteria for a Categorical",
-                    "  Exclusion under 36 CFR 220.6, subject to specialist concurrence.",
+                    "  sensitive area conflicts across all screening categories. Based on this",
+                    f"  GIS screening, the proposed project ({total_mi_rec:.2f} mi) meets the",
+                    "  criteria for a Categorical Exclusion under 36 CFR 220.6,",
+                    "  subject to specialist concurrence.",
                 ]
-            elif red_mi_sum < 0.5:
+            elif red_mi_rec < 0.5:
                 lines += [
                     "  TIERED APPROACH RECOMMENDED — The majority of project miles are clear",
-                    f"  of sensitive area conflicts ({green_mi_sum:.2f} mi GREEN). A limited",
-                    f"  Environmental Assessment (EA) focused on {red_mi_sum:.3f} mi of direct",
+                    f"  of sensitive area conflicts ({green_mi_rec:.2f} mi GREEN). A limited",
+                    f"  Environmental Assessment (EA) focused on {red_mi_rec:.3f} mi of direct",
                     "  conflict segments may be sufficient, with CE treatment applied to",
                     "  the remainder of the alignment.",
                     "",
                     "  Recommended next steps:",
-                    "  1. Field verification of RED-flagged segments",
+                    "  1. Field verification of RED-flagged segments across all categories",
                     "  2. Targeted specialist surveys (Wildlife, Botany, Hydrology)",
                     "  3. Evaluate reroute options to eliminate remaining RED miles",
                 ]
             else:
                 lines += [
                     "  ENVIRONMENTAL ASSESSMENT (EA) — Direct sensitive area conflicts",
-                    f"  ({red_mi_sum:.3f} mi) require EA-level NEPA analysis. Specialist",
-                    "  surveys and formal consultation (ESA Section 7) likely required",
-                    "  prior to project approval.",
+                    f"  ({red_mi_rec:.3f} mi across all screening categories) require EA-level",
+                    "  NEPA analysis. Specialist surveys and formal consultation (ESA",
+                    "  Section 7) likely required prior to project approval.",
                     "",
                     "  Recommended next steps:",
                     "  1. Field-verify all RED-flagged segments",
@@ -2673,8 +2825,8 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 ]
         else:
             lines += [
-                "  Run Stream Crossings and Habitat Overlap analyses to generate",
-                "  an automated NEPA pathway recommendation.",
+                "  Run Stream Crossings and Habitat Overlap analyses (in all relevant",
+                "  categories) to generate an automated NEPA pathway recommendation.",
             ]
 
         lines += [
@@ -2723,25 +2875,29 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             snap_c = {"time": self._crossings_snapshot[0],
                       "layers": self._crossings_snapshot[1]}
 
-        # Habitat — strip QgsGeometry objects
+        # Habitat slots — strip QgsGeometry objects from each slot's data
         _geom_keys = {"red_geom", "yellow_geom", "green_geom", "geom"}
-        habitat_serial = [
-            {k: v for k, v in r.items() if k not in _geom_keys}
-            for r in self._habitat_data
-        ]
-
-        snap_h = None
-        if self._habitat_snapshot:
-            snap_h = {"time": self._habitat_snapshot[0],
-                      "layers": self._habitat_snapshot[1]}
+        slots_serial = {}
+        for slot_name_s, slot_s in self._habitat_slots.items():
+            data_s = slot_s.get("data", [])
+            snap_s = slot_s.get("snapshot")
+            slots_serial[slot_name_s] = {
+                "data": [
+                    {k: v for k, v in r.items() if k not in _geom_keys}
+                    for r in data_s
+                ],
+                "snapshot": (
+                    {"time": snap_s[0], "layers": snap_s[1]} if snap_s else None
+                ),
+                "laa_types": slot_s.get("laa_types", {}),
+            }
 
         state = {
             "fields":             fields,
             "crossings":          crossings_serial,
             "crossings_snapshot": snap_c,
-            "habitat":            habitat_serial,
-            "habitat_snapshot":   snap_h,
-            "laa_layer_types":    self._laa_layer_types,
+            "habitat_slots":      slots_serial,
+            "active_slot":        self._active_slot_name(),
         }
 
         try:
@@ -2791,22 +2947,48 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         if snap_c:
             self._crossings_snapshot = (snap_c["time"], snap_c["layers"])
 
-        # Habitat data + snapshot
-        habitat = state.get("habitat", [])
-        if habitat:
-            self._habitat_data = habitat
+        # Habitat slots — restore each named category
+        slots_loaded = state.get("habitat_slots", {})
+        for slot_name_l, slot_l in slots_loaded.items():
+            if slot_name_l not in self._habitat_slots:
+                self._habitat_slots[slot_name_l] = {
+                    "data": [], "snapshot": None, "laa_types": {}, "display_text": ""
+                }
+            target = self._habitat_slots[slot_name_l]
+            target["data"] = slot_l.get("data", [])
+            snap_l = slot_l.get("snapshot")
+            target["snapshot"] = (snap_l["time"], snap_l["layers"]) if snap_l else None
+            target["laa_types"] = slot_l.get("laa_types", {})
 
-        snap_h = state.get("habitat_snapshot")
-        if snap_h:
-            self._habitat_snapshot = (snap_h["time"], snap_h["layers"])
+        # Restore active slot selection
+        active_name_l = state.get("active_slot", "")
+        if active_name_l:
+            idx_l = self.habitatSlotCombo.findText(active_name_l)
+            if idx_l >= 0:
+                self.habitatSlotCombo.blockSignals(True)
+                self.habitatSlotCombo.setCurrentIndex(idx_l)
+                self.habitatSlotCombo.blockSignals(False)
 
-        laa_types = state.get("laa_layer_types", {})
-        if laa_types:
-            self._laa_layer_types = laa_types
-
-        if self._habitat_data:
+        # Enable export buttons if the active slot has data
+        active_slot_l = self._active_slot()
+        if active_slot_l.get("data"):
             self.exportHabitatButton.setEnabled(True)
             self.exportLAAButton.setEnabled(True)
+
+        # Backward-compatibility: migrate old single-slot format saved by earlier versions
+        if "habitat" in state and state.get("habitat") and not slots_loaded:
+            first_slot = self._habitat_slots.get(self.DEFAULT_HABITAT_SLOTS[0])
+            if first_slot is not None:
+                first_slot["data"] = state["habitat"]
+                snap_old = state.get("habitat_snapshot")
+                first_slot["snapshot"] = (
+                    (snap_old["time"], snap_old["layers"]) if snap_old else None
+                )
+                laa_old = state.get("laa_layer_types", {})
+                first_slot["laa_types"] = laa_old
+                if first_slot["data"]:
+                    self.exportHabitatButton.setEnabled(True)
+                    self.exportLAAButton.setEnabled(True)
 
         self._update_report_status()
 

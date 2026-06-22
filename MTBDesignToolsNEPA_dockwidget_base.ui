@@ -663,6 +663,38 @@
          </widget>
         </item>
 
+        <!-- Analysis category (named slot) selector -->
+        <item>
+         <layout class="QHBoxLayout" name="habitatSlotRow">
+          <property name="spacing">
+           <number>4</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="habitatSlotLabel">
+            <property name="text">
+             <string>Analysis category:</string>
+            </property>
+            <property name="toolTip">
+             <string>Each category stores its results independently — run NSO, Hydrology, Wetlands, etc. separately without overwriting each other. Results appear as separate sections in the NEPA memo.</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="habitatSlotCombo">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+              <horstretch>1</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="toolTip">
+             <string>Select the analysis category for this run. Switch categories to review or re-run each theme independently.</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+
         <!-- Group selector row -->
         <item>
          <layout class="QHBoxLayout" name="habitatGroupRow">
