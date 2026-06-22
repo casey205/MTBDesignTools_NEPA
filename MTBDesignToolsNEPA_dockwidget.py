@@ -2326,36 +2326,36 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             self.reportCrossingsStatus.setText(
                 "✗  Stream Crossings — not yet run (go to Stream Crossings tab)"
             )
-            self.reportCrossingsStatus.setStyleSheet("color: #888;")
+            self.reportCrossingsStatus.setStyleSheet("color: #cc2200;")
 
-        # Build a multi-line status line for all habitat slots
-        habitat_lines = []
-        any_run = False
+        # Build a per-slot HTML status block — green for run, red for not yet run
+        from qgis.PyQt.QtCore import Qt
+        html_lines = []
         for name, slot in self._habitat_slots.items():
             snap = slot.get("snapshot")
             data = slot.get("data", [])
             if snap:
-                any_run = True
                 ts, layers = snap
                 red_mi = sum(r["red_miles"] for r in data)
                 n_trails = len(data)
-                habitat_lines.append(
+                layer_str = ", ".join(layers[:2]) + ("…" if len(layers) > 2 else "")
+                text = (
                     f"✓  {name}  |  {ts}  |  {n_trails} trails  |  "
-                    f"{red_mi:.3f} mi RED  |  "
-                    f"{', '.join(layers[:2])}{'…' if len(layers) > 2 else ''}"
+                    f"{red_mi:.3f} mi RED  |  {layer_str}"
                 )
+                html_lines.append(f'<span style="color:#1a7a1a;">{text}</span>')
             else:
-                habitat_lines.append(f"✗  {name} — not yet run")
+                html_lines.append(
+                    f'<span style="color:#cc2200;">✗  {name} — not yet run</span>'
+                )
 
-        if habitat_lines:
-            self.reportHabitatStatus.setText("\n".join(habitat_lines))
-            self.reportHabitatStatus.setStyleSheet(
-                "color: #1a7a1a;" if any_run else "color: #888;"
-            )
+        if html_lines:
+            self.reportHabitatStatus.setTextFormat(Qt.RichText)
+            self.reportHabitatStatus.setText("<br/>".join(html_lines))
+            self.reportHabitatStatus.setStyleSheet("")
         else:
-            self.reportHabitatStatus.setText(
-                "✗  Habitat Triage — no categories run yet"
-            )
+            self.reportHabitatStatus.setTextFormat(Qt.PlainText)
+            self.reportHabitatStatus.setText("✗  Habitat Triage — no categories run yet")
             self.reportHabitatStatus.setStyleSheet("color: #888;")
 
     # ── Stream Crossings tab index in mainTabWidget ──────────────────
