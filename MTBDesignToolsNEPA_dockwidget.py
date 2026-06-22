@@ -1295,8 +1295,16 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
     # ── Named-slot helpers ───────────────────────────────────────────────
 
     def _active_slot_name(self):
-        """Return the current category name shown in the slot combo."""
-        return self.habitatSlotCombo.currentText()
+        """Return the current category name shown in the slot combo (stripped)."""
+        return self.habitatSlotCombo.currentText().strip()
+
+    def _register_slot_in_combo(self, name):
+        """Add a typed slot name to the combo item list if not already present,
+        so it appears in the dropdown for easy re-selection this session."""
+        if name and self.habitatSlotCombo.findText(name) < 0:
+            self.habitatSlotCombo.blockSignals(True)
+            self.habitatSlotCombo.addItem(name)
+            self.habitatSlotCombo.blockSignals(False)
 
     def _active_slot(self):
         """Return (and lazily create) the dict for the currently selected slot."""
@@ -1307,14 +1315,17 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             }
         return self._habitat_slots[name]
 
-    def _on_slot_changed(self, _idx):
-        """Restore stored results display when the user switches analysis categories."""
-        slot = self._active_slot()
+    def _on_slot_changed(self, *_):
+        """Restore stored results display when the user switches analysis categories.
+        Uses a non-creating peek so typing a new name doesn't create empty slots."""
+        name = self._active_slot_name().strip()
+        if not name:
+            return
+        slot = self._habitat_slots.get(name, {})  # peek only — don't create yet
         text = slot.get("display_text", "")
         if text:
             self.habitatResultsText.setPlainText(text)
         else:
-            name = self._active_slot_name()
             self.habitatResultsText.setPlainText(
                 f"No analysis run for '{name}' yet.\n"
                 "Select sensitive layers above, then click Run Triage Analysis."
@@ -1331,8 +1342,17 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         self.habitatSlotCombo.blockSignals(True)
         for name in self.DEFAULT_HABITAT_SLOTS:
             self.habitatSlotCombo.addItem(name)
+        self.habitatSlotCombo.setEditable(True)
+        self.habitatSlotCombo.setInsertPolicy(
+            self.habitatSlotCombo.NoInsert  # we control when items are added
+        )
+        self.habitatSlotCombo.lineEdit().setPlaceholderText(
+            "Type a category name or pick from list…"
+        )
         self.habitatSlotCombo.blockSignals(False)
+        # currentIndexChanged covers dropdown picks; editingFinished covers typed names
         self.habitatSlotCombo.currentIndexChanged.connect(self._on_slot_changed)
+        self.habitatSlotCombo.lineEdit().editingFinished.connect(self._on_slot_changed)
 
         self.refreshHabitatButton.clicked.connect(self._refresh_habitat_tab)
         self.habitatGroupCombo.currentIndexChanged.connect(self.populate_habitat_list)
@@ -1669,6 +1689,8 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         results.sort(key=lambda r: (_order[r["triage"]], r["trail"]))
 
         import datetime as _dt
+        slot_name = self._active_slot_name()
+        self._register_slot_in_combo(slot_name)  # ensure typed name is in dropdown
         slot = self._active_slot()
         slot["data"] = results
         slot["snapshot"] = (
@@ -2983,6 +3005,13 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             target["snapshot"] = (snap_l["time"], snap_l["layers"]) if snap_l else None
             target["laa_types"] = slot_l.get("laa_types", {})
 
+        # Add any custom slot names (not in the default list) back to the combo
+        self.habitatSlotCombo.blockSignals(True)
+        for slot_name_l in slots_loaded:
+            if self.habitatSlotCombo.findText(slot_name_l) < 0:
+                self.habitatSlotCombo.addItem(slot_name_l)
+        self.habitatSlotCombo.blockSignals(False)
+
         # Restore active slot selection
         active_name_l = state.get("active_slot", "")
         if active_name_l:
@@ -2990,6 +3019,11 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             if idx_l >= 0:
                 self.habitatSlotCombo.blockSignals(True)
                 self.habitatSlotCombo.setCurrentIndex(idx_l)
+                self.habitatSlotCombo.blockSignals(False)
+            else:
+                # Custom name not in list yet — set as text directly
+                self.habitatSlotCombo.blockSignals(True)
+                self.habitatSlotCombo.setCurrentText(active_name_l)
                 self.habitatSlotCombo.blockSignals(False)
 
         # Enable export buttons if the active slot has data
