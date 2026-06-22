@@ -772,19 +772,22 @@
            <number>4</number>
           </property>
           <item>
-           <widget class="QLabel" name="habitatBufferLabel">
+           <widget class="QCheckBox" name="habitatBufferCheckBox">
             <property name="text">
-             <string>Proximity buffer:</string>
+             <string>Enable proximity buffer:</string>
             </property>
             <property name="toolTip">
-             <string>Trails within this distance of a sensitive layer are flagged YELLOW (adjacent) even if they don't directly intersect</string>
+             <string>Check ONLY for layers where the mapped boundary has spatial uncertainty — e.g. undelineated wetland areas or LiDAR-derived stream centerlines. Do NOT use for authoritative FS corporate layers (NSO habitat, SHAB, Critical Habitat, Riparian Reserves) — their polygon edge IS the regulatory boundary.</string>
+            </property>
+            <property name="checked">
+             <bool>false</bool>
             </property>
            </widget>
           </item>
           <item>
            <widget class="QSpinBox" name="habitatBufferSpinBox">
             <property name="minimum">
-             <number>0</number>
+             <number>1</number>
             </property>
             <property name="maximum">
              <number>1000</number>
@@ -793,17 +796,23 @@
              <number>100</number>
             </property>
             <property name="toolTip">
-             <string>Buffer distance in feet for YELLOW (adjacent) classification</string>
+             <string>Buffer distance in feet — trails within this distance are flagged YELLOW (adjacent)</string>
             </property>
             <property name="maximumWidth">
              <number>70</number>
+            </property>
+            <property name="enabled">
+             <bool>false</bool>
             </property>
            </widget>
           </item>
           <item>
            <widget class="QLabel" name="habitatBufferUnitsLabel">
             <property name="text">
-             <string>feet</string>
+             <string>ft</string>
+            </property>
+            <property name="enabled">
+             <bool>false</bool>
             </property>
            </widget>
           </item>

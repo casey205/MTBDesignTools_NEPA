@@ -1284,6 +1284,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         self.runHabitatButton.clicked.connect(self.run_habitat_analysis)
         self.exportHabitatButton.clicked.connect(self.export_habitat_triage)
         self.exportLAAButton.clicked.connect(self.export_laa_shapefile)
+        self.habitatBufferCheckBox.toggled.connect(self._on_buffer_toggled)
         self._refresh_habitat_tab()
 
         from qgis.PyQt.QtGui import QFont
@@ -1293,6 +1294,11 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         """Repopulate group combo then layer list."""
         self._populate_habitat_groups()
         self.populate_habitat_list()
+
+    def _on_buffer_toggled(self, checked):
+        """Enable or disable the buffer spinbox and units label."""
+        self.habitatBufferSpinBox.setEnabled(checked)
+        self.habitatBufferUnitsLabel.setEnabled(checked)
 
     def _populate_habitat_groups(self):
         """Fill habitatGroupCombo with all QGIS layer-tree group names."""
@@ -1411,7 +1417,10 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         )
         miles_mult = distance_multiplier(trail_lyr, "Miles")
 
-        buffer_ft = self.habitatBufferSpinBox.value()
+        buffer_ft = (
+            self.habitatBufferSpinBox.value()
+            if self.habitatBufferCheckBox.isChecked() else 0
+        )
         crs_units = trail_lyr.crs().mapUnits()
         ft_to_native = QgsUnitTypes.fromUnitToUnitFactor(
             QgsUnitTypes.DistanceFeet, crs_units
@@ -1633,7 +1642,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
 
         lines = [
             f"Sensitive layers : {', '.join(l.name() for l in sensitive_layers)}",
-            f"Buffer           : {buffer_ft} ft",
+            f"Buffer           : {'None — direct overlap only (FS corporate layers)' if buffer_ft == 0 else f'{buffer_ft} ft proximity zone'}",
             "",
             "═" * 66,
             "SEGMENT-LEVEL TRIAGE SUMMARY",
@@ -1641,7 +1650,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             f"  {'Category':<30} {'Trails':>7}  {'Miles in zone':>14}",
             f"  {'─'*56}",
             f"  {'🔴 RED   (direct intersection)':<30} {n_red:>7}  {total_red_mi:>14.3f}",
-            f"  {'🟡 YELLOW (within ' + str(buffer_ft) + ' ft)':<30} {n_yellow:>7}  {total_yellow_mi:>14.3f}",
+            f"  {'🟡 YELLOW (within ' + str(buffer_ft) + ' ft)' if buffer_ft > 0 else '🟡 YELLOW (buffer disabled)':<30} {n_yellow:>7}  {total_yellow_mi:>14.3f}",
             f"  {'🟢 GREEN  (clear)':<30} {n_green:>7}  {total_green_mi:>14.3f}",
             f"  {'─'*56}",
             f"  {'Total project':<30} {len(results):>7}  {total_mi:>14.3f}",
