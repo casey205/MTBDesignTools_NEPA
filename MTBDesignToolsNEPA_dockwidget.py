@@ -303,6 +303,10 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             for name in self.DEFAULT_HABITAT_SLOTS
         }
 
+        # Wrap every tab page in a QScrollArea so the dock widget can be
+        # freely resized smaller than its content without a hard minimum floor.
+        self._wrap_tabs_in_scroll_areas()
+
         self._setup_profile_tab()
         self._setup_crossings_tab()
         self._setup_habitat_tab()
@@ -319,6 +323,44 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
         # for projects that are already open when the plugin loads
         QgsProject.instance().readProject.connect(self._load_from_project)
         self._load_from_project()
+
+    # ──────────────────────────────────────────────
+    # Setup helpers
+    # ──────────────────────────────────────────────
+
+    def _wrap_tabs_in_scroll_areas(self):
+        """Wrap each tab page in a QScrollArea so the dock can be resized to
+        any height.  Without this, Qt computes the tab widget's minimum size
+        as the maximum of all pages' content minimums, making the dock unable
+        to shrink below ~450 px regardless of the current tab.
+
+        Widget references set by setupUi (self.profileLabel, etc.) remain
+        valid — we're only reparenting the top-level page widget, not
+        recreating any children.
+        """
+        from qgis.PyQt.QtWidgets import QScrollArea, QSizePolicy
+
+        n = self.mainTabWidget.count()
+        # Snapshot titles + widgets before modifying the tab bar
+        tabs = [
+            (self.mainTabWidget.tabText(i), self.mainTabWidget.widget(i))
+            for i in range(n)
+        ]
+
+        # Remove all tabs (reverse to keep indices stable during iteration)
+        for i in reversed(range(n)):
+            self.mainTabWidget.removeTab(i)
+
+        # Re-insert each page wrapped in a frameless, resizable scroll area
+        for title, widget in tabs:
+            scroll = QScrollArea()
+            scroll.setWidget(widget)
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QScrollArea.NoFrame)
+            self.mainTabWidget.addTab(scroll, title)
+
+        # Allow the tab widget itself to shrink to any height
+        self.mainTabWidget.setMinimumHeight(0)
 
     # ──────────────────────────────────────────────
     # Setup helpers
