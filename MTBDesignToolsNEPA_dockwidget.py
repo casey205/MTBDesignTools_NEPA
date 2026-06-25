@@ -169,6 +169,18 @@ class ElevationProfileCanvas(FigureCanvas):
         self.ax = self.fig.add_subplot(111)
         self.distance_label = "Native"
 
+        # Allow the dock widget to be resized smaller than matplotlib's default
+        # figure size (~614×461px).  sizeHint() is still large (fills space),
+        # but minimumSizeHint and minimumHeight no longer act as a hard floor.
+        from qgis.PyQt.QtWidgets import QSizePolicy
+        from qgis.PyQt.QtCore import QSize as _QSize
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumHeight(80)
+
+    def minimumSizeHint(self):
+        from qgis.PyQt.QtCore import QSize
+        return QSize(100, 80)
+
     def _imba_class(self, slope_pct, mode):
         g = abs(slope_pct)
         if g < 5:
