@@ -1,5 +1,7 @@
 import os
 import matplotlib
+
+PLUGIN_VERSION = "0.1.0"
 try:
     matplotlib.use("Qt5Agg", force=True)
 except Exception:
@@ -2395,6 +2397,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
 
         self.generateReportButton.clicked.connect(self.generate_report)
         self.exportReportButton.clicked.connect(self.export_report)
+        self.exportMethodologyButton.clicked.connect(self.export_methodology)
         self.reportPreviewText.setFont(QFont("Courier New", 9))
 
         # Pre-fill date field with today
@@ -2547,6 +2550,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             f"  Location : {location}",
             f"  Prepared : {preparer}",
             f"  Date     : {date_str}",
+            f"  Tool     : MTBDesignTools NEPA v{PLUGIN_VERSION}",
             "",
         ]
 
@@ -2774,8 +2778,81 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                 lines += ["", f"  Non-Fish-Bearing Crossings (Class 3–5, n={nfb_count}):"]
                 lines.append(f"  {nfb_note}")
 
+        # ── Decision Matrix ──────────────────────────────────────────────
+        lines.append(section("5. SCREENING DECISION MATRIX"))
+
+        populated_slots_dm = [
+            (nm, sl) for nm, sl in self._habitat_slots.items() if sl.get("data")
+        ]
+        if populated_slots_dm:
+            dm_bar = "─" * 68
+            lines += [
+                f"  {'Category':<25} {'RED mi':>7}  {'YELLOW mi':>9}  {'GREEN mi':>8}  {'Signal'}",
+                f"  {dm_bar}",
+            ]
+            any_red_dm = False
+            total_red_dm = 0.0
+            for nm_dm, sl_dm in self._habitat_slots.items():
+                data_dm = sl_dm.get("data", [])
+                if not data_dm:
+                    lines.append(f"  {nm_dm[:25]:<25} {'—':>7}  {'—':>9}  {'—':>8}  Not run")
+                    continue
+                r_mi = sum(r["red_miles"]    for r in data_dm)
+                y_mi = sum(r["yellow_miles"] for r in data_dm)
+                g_mi = sum(r["green_miles"]  for r in data_dm)
+                total_red_dm += r_mi
+                if r_mi > 0:
+                    any_red_dm = True
+                    signal = "FIELD VERIFY" if r_mi < 0.5 else "EA LIKELY"
+                elif y_mi > 0:
+                    signal = "REVIEW"
+                else:
+                    signal = "CLEAR"
+                lines.append(
+                    f"  {nm_dm[:25]:<25} {r_mi:>7.3f}  {y_mi:>9.3f}  {g_mi:>8.3f}  {signal}"
+                )
+            lines += [
+                f"  {dm_bar}",
+                "",
+            ]
+
+            # Stream crossings row
+            if self._crossings_data:
+                fb_dm = sum(1 for c in self._crossings_data if c.get("fish_bearing") == "Yes")
+                c3_dm = sum(1 for c in self._crossings_data if c.get("stream_class") == "Class 3")
+                xing_signal = "FIELD SURVEYS" if fb_dm > 0 or c3_dm > 0 else "GIS ONLY"
+                lines += [
+                    f"  {'Stream Crossings':<25} {len(self._crossings_data):>7} total  "
+                    f"  {'':>8}  {xing_signal}",
+                    "",
+                ]
+
+            # Overall pathway signal
+            if total_red_dm < 0.1 and not any_red_dm:
+                pathway_dm = "CE LIKELY — no direct conflicts detected across all screening categories."
+            elif total_red_dm < 0.5:
+                pathway_dm = (
+                    f"TIERED / LIMITED EA — {total_red_dm:.3f} mi of direct conflict; "
+                    "majority of alignment is clear."
+                )
+            else:
+                pathway_dm = (
+                    f"EA REQUIRED — {total_red_dm:.3f} mi of direct conflict across all "
+                    "screening categories."
+                )
+            lines += [
+                f"  Overall NEPA Pathway Signal: {pathway_dm}",
+                "  (Advisory only — subject to specialist concurrence and formal NEPA analysis.)",
+                "",
+            ]
+        else:
+            lines += [
+                "  [Run Stream Crossings and Habitat Overlap analyses to populate the",
+                "   decision matrix.]",
+            ]
+
         # ── Habitat / Trail Triage — one subsection per named category ──
-        lines.append(section("5. SENSITIVE AREA OVERLAP — TRAIL TRIAGE"))
+        lines.append(section("6. SENSITIVE AREA OVERLAP — TRAIL TRIAGE"))
 
         any_triage_run = any(s.get("data") for s in self._habitat_slots.values())
         if not any_triage_run:
@@ -2873,7 +2950,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
                                 )
 
         # ── Data Gaps ──
-        lines.append(section("6. DATA GAPS / OUTSTANDING QUESTIONS"))
+        lines.append(section("7. DATA GAPS / OUTSTANDING QUESTIONS"))
         data_gaps = [g.strip() for g in data_gaps_raw.splitlines() if g.strip()]
         if data_gaps:
             for i, gap in enumerate(data_gaps, 1):
@@ -2890,7 +2967,7 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             ]
 
         # ── NEPA Recommendation ──
-        lines.append(section("7. NEPA RECOMMENDATION"))
+        lines.append(section("8. NEPA RECOMMENDATION"))
         populated_slots_rec = [
             (nm, sl) for nm, sl in self._habitat_slots.items() if sl.get("data")
         ]
@@ -3161,6 +3238,91 @@ class MTBDesignToolsNEPADockWidget(QDockWidget, FORM_CLASS):
             QMessageBox.information(
                 self, "Export Complete",
                 f"Memo saved to:\n{path}"
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+
+    def export_methodology(self):
+        """Export the analytical methodology document as a versioned plain-text file."""
+        import datetime
+
+        # Locate the bundled METHODOLOGY.txt next to this file
+        meth_path = os.path.join(os.path.dirname(__file__), "METHODOLOGY.txt")
+        if not os.path.exists(meth_path):
+            QMessageBox.critical(
+                self, "Methodology Missing",
+                "METHODOLOGY.txt not found in the plugin directory.\n"
+                f"Expected: {meth_path}"
+            )
+            return
+
+        try:
+            with open(meth_path, "r", encoding="utf-8") as fh:
+                base_text = fh.read()
+        except Exception as exc:
+            QMessageBox.critical(self, "Read Error", str(exc))
+            return
+
+        # Stamp export timestamp and project metadata at the top
+        proj_name = self.reportProjectNameEdit.text().strip() or "[Project Name]"
+        forest    = self.reportForestEdit.text().strip()      or "[Forest / Unit]"
+        preparer  = self.reportPreparerEdit.text().strip()    or "[Preparer]"
+        now_str   = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        W = 80
+        stamp_lines = [
+            "=" * W,
+            "  EXPORT RECORD".ljust(W - 2),
+            f"  Project  : {proj_name}",
+            f"  Forest   : {forest}",
+            f"  Preparer : {preparer}",
+            f"  Exported : {now_str}",
+            f"  Tool     : MTBDesignTools NEPA v{PLUGIN_VERSION}",
+            "=" * W,
+            "",
+        ]
+        stamp = "\n".join(stamp_lines)
+
+        # Update the version line in the document to reflect current plugin version
+        import re
+        versioned_text = re.sub(
+            r"(MTBDesignTools NEPA — Desktop GIS Screening Methodology\s*\n\s*"
+            r"Redside Surveying and Mapping, LLC\s*\n\s*Version )[\d.]+",
+            rf"\g<1>{PLUGIN_VERSION}",
+            base_text,
+        )
+
+        # Insert version history entry for current version if not already present
+        version_marker = f"Version {PLUGIN_VERSION}"
+        if version_marker not in versioned_text:
+            today = datetime.date.today().strftime("%B %Y")
+            new_entry = (
+                f"{version_marker}  ({today})\n"
+                f"  [Version history entry — update with changes for this release]\n\n"
+            )
+            versioned_text = versioned_text.replace(
+                "================================================================================\nEnd of Methodology Document",
+                "================================================================================\nVERSION HISTORY\n"
+                "================================================================================\n\n"
+                + new_entry
+                + "================================================================================\nEnd of Methodology Document",
+            )
+
+        output_text = stamp + versioned_text
+
+        default_name = f"MTBDesignTools_Methodology_v{PLUGIN_VERSION.replace('.', '_')}.txt"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Methodology Document", default_name, "Text file (*.txt)"
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(output_text)
+            QMessageBox.information(
+                self, "Export Complete",
+                f"Methodology document (v{PLUGIN_VERSION}) saved to:\n{path}"
             )
         except Exception as exc:
             QMessageBox.critical(self, "Export Error", str(exc))

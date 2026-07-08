@@ -1,0 +1,337 @@
+================================================================================
+  MTBDesignTools NEPA — Desktop GIS Screening Methodology
+  Redside Surveying and Mapping, LLC
+  Version 0.1.0
+================================================================================
+
+Desktop environmental screening is intended to reduce uncertainty prior to
+field investigations by identifying potential environmental constraints using
+currently available geospatial information. Final environmental determinations
+remain the responsibility of qualified specialists based on field verification
+and applicable regulatory requirements.
+
+--------------------------------------------------------------------------------
+
+PURPOSE OF THIS METHODOLOGY
+----------------------------
+This document describes the analytical methods used to perform desktop
+environmental screening for proposed trail alignments using the MTBDesignTools
+NEPA plugin for QGIS. The workflow is intended to provide a transparent,
+repeatable, and defensible GIS-based screening process that helps identify
+potential environmental constraints early in project development.
+
+The results of this screening are intended to:
+  - Support planning and project description development
+  - Inform specialist review and scoping
+  - Prioritize field investigations and focus limited survey effort
+  - Provide a documented, auditable record of desktop GIS analysis
+
+The results are not intended to replace field surveys, regulatory
+determinations, or the professional judgment of qualified specialists.
+
+
+GUIDING PRINCIPLES
+------------------
+The following principles guide the design and application of this methodology:
+
+  Transparency
+    All inputs, methods, outputs, and limitations are documented. Layer names,
+    versions, analysis timestamps, and analyst identity are recorded in every
+    deliverable.
+
+  Repeatability
+    The same inputs will produce the same outputs. Methods are implemented in
+    code, not manual GIS workflows, eliminating operator variability.
+
+  Data deficiency acknowledged
+    Where input data is incomplete, outdated, or of uncertain quality, that
+    uncertainty is explicitly documented in the Data Gaps section of every
+    screening memo.
+
+  Existing agency datasets only
+    Analysis is performed exclusively against GIS layers provided by or
+    authorized by the Forest Service. No stream channels, habitat boundaries,
+    or sensitive areas are independently derived unless explicitly stated.
+
+  Conservative assumptions where uncertainty exists
+    When data quality is uncertain, the analysis errs toward flagging potential
+    conflicts rather than dismissing them. A false negative (missed conflict)
+    is more consequential than a false positive (unnecessary field check).
+
+  Specialist-supported workflow
+    Desktop screening identifies and prioritizes — it does not determine.
+    Every RED or YELLOW finding is a referral to a qualified specialist, not
+    a conclusion.
+
+
+WHAT THIS WORKFLOW IS DESIGNED TO DO
+--------------------------------------
+  - Identify potential environmental constraints along proposed trail alignments
+    using agency-provided GIS data before field investigations begin
+  - Quantify the spatial relationship between trail segments and sensitive area
+    designations with documented precision
+  - Classify trail segments by conflict level to focus field effort on areas
+    of highest potential concern
+  - Produce formally attributed GIS shapefiles suitable for specialist review
+    and NEPA record-keeping
+  - Generate a structured screening memo that summarizes findings, documents
+    methods, and provides an auditable analysis record
+  - Reduce repetitive manual GIS effort and improve consistency across projects
+  - Support grant applications and project cost estimation by providing early
+    constraint identification
+
+
+QUALITY ASSURANCE / QUALITY CONTROL
+-------------------------------------
+The following QA/QC measures are built into the analytical workflow:
+
+  Coordinate Reference System (CRS) verification
+    All input layers are checked for CRS compatibility before analysis. Where
+    a sensitive area layer or stream layer is in a different CRS than the trail
+    alignment layer, geometries are automatically reprojected using QGIS's
+    coordinate transform engine before intersection. Reprojection events are
+    flagged in the results panel for analyst review.
+
+  Geometry validity
+    Trail and sensitive area geometries are checked before processing. Features
+    with null or empty geometry are skipped and do not contribute to results.
+    This prevents corrupted or incomplete features from producing false
+    intersections.
+
+  Duplicate crossing prevention
+    The stream crossing analysis records one point per trail-stream
+    intersection. Where a trail and stream share a coincident segment rather
+    than a clean crossing point, the geometry collection is decomposed to
+    extract individual point locations. Very short micro-segment results
+    (< 0.00005 miles) are filtered from shapefile exports to remove spurious
+    near-zero-length artifacts.
+
+  Spatial indexing
+    All sensitive area layers are pre-indexed using a QgsSpatialIndex before
+    intersection. This ensures that only geometrically relevant candidate
+    features are tested for each trail segment, reducing the risk of incorrect
+    attributions from distant features.
+
+  Layer provenance documented
+    The name of every layer used in an analysis run is recorded alongside the
+    analysis timestamp in the QGIS project file. This record appears in the
+    screening memo and persists across sessions so that results can always be
+    traced to specific input data.
+
+  Analysis timestamp stored
+    Every analysis run is date- and time-stamped. Results cannot be back-dated
+    or silently updated. Re-running an analysis on updated data creates a new
+    timestamped record.
+
+  Analyst review before report generation
+    The screening memo is not generated automatically. The analyst reviews
+    results in the plugin panel, annotates fish-bearing crossings with crossing
+    type and notes, enters project design features and data gap statements, and
+    then generates the memo. This review step is a deliberate gate between
+    analysis and deliverable.
+
+  Mileage unit consistency
+    All distance and area calculations use the CRS unit conversion factor of
+    the trail layer's native coordinate system, converted to miles at output.
+    This ensures consistent results regardless of whether the project data is
+    in feet, meters, or degrees.
+
+
+================================================================================
+ANALYTICAL MODULES
+================================================================================
+
+MODULE 1 — PROFILE & DIFFICULTY
+---------------------------------
+PURPOSE
+  Generates an elevation profile along a selected trail alignment and
+  classifies trail difficulty using the IMBA grade standard. Supports project
+  descriptions, aMTB accessibility assessments, and EA design narratives.
+
+DATA INPUTS
+  - Trail alignment layer (Trail_Design or Trail_Alignment) — line geometry
+  - Digital Elevation Model (DEM) — raster layer (LiDAR-derived recommended)
+
+ANALYTICAL METHOD
+  The DEM is sampled at 2-meter intervals along the trail geometry using QGIS's
+  raster sampling function. Slope grade is calculated using a 12-sample (24 m)
+  rolling window centered on each point, smoothing microtopographic noise and
+  producing grades representative of sustained riding experience. Average climb
+  and descent grades are computed separately.
+
+IMBA DIFFICULTY CLASSIFICATION
+    Grade 0–5%   → Easy (Green Circle)
+    Grade 5–10%  → Moderate (Blue Square)
+    Grade 10–15% → Difficult (Black Diamond)
+    Grade >15%   → Extreme (Double Black Diamond)
+
+OUTPUTS
+  - Interactive elevation profile with IMBA color coding
+  - Summary: trail name, length, average climb/descent grade, IMBA class
+  - Map canvas marker synchronized to profile hover position
+
+
+MODULE 2 — STREAM CROSSINGS
+------------------------------
+PURPOSE
+  Identifies all trail–stream intersections, classifies crossings by stream
+  class and fish-bearing status, and produces a crossing inventory for NEPA
+  hydrology and fisheries analysis.
+
+DATA INPUTS
+  - Trail alignment layer — line geometry
+  - Stream network layers — line geometry, Forest Service provided
+  - Stream class inferred from layer name (e.g., "Class_2_Streams" → Class 2)
+
+ANALYTICAL METHOD
+  Vector line-to-line intersection using QGIS native geometry operations.
+  CRS differences are resolved by reprojecting stream geometries to the trail
+  layer's CRS before intersection. Each intersection point is attributed with
+  trail name, stream layer, stream class, fish-bearing status, and distance
+  along trail in miles.
+
+FISH-BEARING CLASSIFICATION (WNF/NWFP PROTOCOL)
+    Class 1   → Verify (perennial; confirm in field)
+    Class 2   → Yes (fish-bearing)
+    Class 3   → Verify (intermittent; field survey recommended)
+    Class 4   → No (ephemeral; GIS documentation only)
+    Class 5   → No (ephemeral; GIS documentation only)
+
+IMPORTANT SCOPE NOTE
+  This analysis identifies crossings with the provided layer version. It does
+  not identify streams not present in the provided data, verify channel
+  positions in the field, or assess stream condition. Existing road-stream
+  crossings are excluded from the new-construction crossing count.
+
+OUTPUTS
+  - Crossing summary by class with recommended survey action
+  - Per-trail breakdown, fish-bearing annotation table
+  - Point shapefile with full attribute table
+  - Crossing point layer on QGIS map canvas
+
+
+MODULE 3 — HABITAT OVERLAP / TRAIL TRIAGE
+-------------------------------------------
+PURPOSE
+  Determines the spatial relationship between trail segments and sensitive area
+  layers, classifies segments by conflict level, and produces LAA pre-reporting
+  shapefiles for ESA Section 7 consultation and NEPA specialist review.
+
+DATA INPUTS
+  - Trail alignment layer — line geometry
+  - Sensitive area layers — polygon or line geometry, Forest Service provided
+
+NAMED ANALYSIS CATEGORIES
+  Each sensitive layer is screened independently in a named analysis slot
+  (e.g., "NSOcorearea2025_DB", "NSO Nest Patch"). Results are stored
+  independently and generate separate memo subsections and map layers.
+
+TRIAGE CLASSIFICATION
+    RED    — Trail intersects directly with the sensitive area boundary.
+             Requires field verification and/or specialist review.
+             Potential LAA determination trigger.
+
+    YELLOW — Trail falls within optional proximity buffer outside the direct
+             boundary. Desktop review recommended. (Buffer disabled by default
+             for authoritative FS polygon layers.)
+
+    GREEN  — Trail is clear of all direct conflicts for this category.
+
+ANALYTICAL METHOD
+  For each trail-layer pair: CRS reconciliation → spatial index construction
+  → intersection testing → mileage calculation by RED/YELLOW/GREEN → per-layer
+  attribution. Line-type sensitive layers receive a small buffer (2 ft) to
+  create a testable zone; polygon layers are used as-is unless the optional
+  proximity buffer is enabled.
+
+CONFIDENCE NOTE
+  Results are as accurate as the input layer boundaries. The FS corporate
+  GIS layers represent authoritative mapped designations; the plugin tests
+  trail geometry against those boundaries as provided.
+
+LAA PRE-REPORT SHAPEFILE EXPORT
+  Trail geometry is densified at 5-meter intervals. Each 5-meter midpoint is
+  classified against each sensitive layer's spatial index. Consecutive segments
+  with identical classification are merged into continuous polyline features.
+  Output attributes: Trail, Seg_Mi, one Yes/No column per LAA category
+  (NSO_Hab, Crit_Hab, RA32_Hab, LRMP_Alloc, Sensitive), In_Layers.
+
+OUTPUTS
+  - Named triage layer on map canvas, symbolized RED/YELLOW/GREEN
+  - Triage shapefile (SegType attribute: RED/YELLOW/GREEN)
+  - LAA Pre-Report shapefile (Yes/No by LAA category per segment)
+  - Results and timestamps saved to QGIS project file
+
+
+MODULE 4 — NEPA SCREENING MEMO
+---------------------------------
+PURPOSE
+  Assembles analysis results, project metadata, and analyst narrative into a
+  structured plain-text screening memo for NEPA planning and specialist review.
+
+MEMO SECTIONS
+  Key Findings (auto-generated) | 1. Proposed Action | 2. Project Design
+  Features | 3. Desktop Screening Methodology | 4. Stream Crossing Analysis |
+  5. Sensitive Area Overlap (one subsection per analysis category) |
+  6. Data Gaps | 7. NEPA Recommendation
+
+  All analysis results are stamped with the timestamp and layer names from the
+  run that produced them. Results persist to the QGIS project file across
+  sessions.
+
+DECISION FRAMEWORK
+  The NEPA pathway recommendation is generated from combined analysis results:
+
+    All RED miles < 0.1 mi, no RED segments    → Categorical Exclusion (CE)
+    RED miles 0.1–0.5 mi                       → Tiered Approach recommended
+    RED miles > 0.5 mi                         → Environmental Assessment (EA)
+
+  This signal is advisory only — subject to specialist concurrence and formal
+  NEPA analysis.
+
+
+================================================================================
+LIMITATIONS
+================================================================================
+
+  1. Layer currency — Results reflect the layer version loaded at analysis time.
+     Layer name and date are documented in every memo. Confirm current
+     authoritative version with the responsible FS specialist before
+     relying on results for formal determinations.
+
+  2. Positional accuracy — Trail alignment and sensitive area boundary
+     positions reflect the GIS layers as mapped. Field conditions may vary.
+     Field verification of conflict locations is recommended before final
+     determination.
+
+  3. Unmapped features — The analysis cannot detect sensitive areas, streams,
+     or resources not present in the loaded layers. All known data gaps are
+     documented in the memo's Data Gaps section.
+
+  4. No regulatory determination — This analysis is a desktop GIS screening.
+     It does not constitute a biological opinion, formal LAA determination,
+     wetland delineation, field survey, or any regulatory finding. All formal
+     determinations require qualified specialist review.
+
+  5. Road segment exclusion — Stream crossing counts reflect proposed new trail
+     construction only. Existing authorized road-stream crossings are excluded.
+
+  6. Stream classification — Stream class is inferred from layer name per WNF
+     convention. Where layer naming does not follow this convention, class
+     attribution should be reviewed by the project hydrologist.
+
+
+================================================================================
+VERSION HISTORY
+================================================================================
+
+Version 0.1.0  (June 2026)
+  Initial release supporting Deathball Mountain Trail Project, Phase 1.
+  Modules: Profile & Difficulty, Stream Crossings, Habitat Overlap (named
+  analysis slots), NEPA Screening Memo with LAA Pre-Report shapefile export.
+  Developed for Willamette National Forest NEPA EA scoping.
+
+
+================================================================================
+End of Methodology Document
+================================================================================

@@ -1271,6 +1271,16 @@ Unchecked: all trails listed including GREEN (clear) segments — useful for int
            </widget>
           </item>
           <item>
+           <widget class="QPushButton" name="exportMethodologyButton">
+            <property name="text">
+             <string>Export Methodology…</string>
+            </property>
+            <property name="toolTip">
+             <string>Save the current analytical methodology document as a plain-text file — include with deliverables for specialist review</string>
+            </property>
+           </widget>
+          </item>
+          <item>
            <spacer name="reportButtonStretch">
             <property name="orientation">
              <enum>Qt::Horizontal</enum>
